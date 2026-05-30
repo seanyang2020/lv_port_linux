@@ -243,9 +243,21 @@ endif()
 
 if (CONFIG_LV_USE_LINUX_FBDEV)
 
-    # FBDEV has no dependencies
     message("Including FBDEV support")
     list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/fbdev.c)
+
+    # XOSFB backend (uses libxosfb.a for qm10xd hardware)
+    set(XOSFB_LIB "${CMAKE_SOURCE_DIR}/xosfb/libxosfb.a" CACHE PATH "Path to libxosfb.a")
+    set(XOSFB_INC "${CMAKE_SOURCE_DIR}/xosfb/include" CACHE PATH "Path to xosfb.h")
+
+    if(EXISTS "${XOSFB_LIB}" AND EXISTS "${XOSFB_INC}/xosfb.h")
+        message("Including XOSFB support (lib: ${XOSFB_LIB})")
+        list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/xosfb.c)
+        list(APPEND PKG_CONFIG_INC ${XOSFB_INC})
+        list(APPEND PKG_CONFIG_LIB ${XOSFB_LIB})
+    else()
+        message("XOSFB library not found at ${XOSFB_LIB} — xosfb backend disabled")
+    endif()
 
 endif()
 

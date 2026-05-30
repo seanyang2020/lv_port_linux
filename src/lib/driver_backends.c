@@ -61,6 +61,7 @@
 backend_init_t available_backends[] = {
 
 #if LV_USE_LINUX_FBDEV
+    backend_init_xosfb,     /* XOSFB is the default when FBDEV is enabled */
     backend_init_fbdev,
 #endif
 

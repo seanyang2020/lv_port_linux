@@ -157,20 +157,50 @@ static lv_indev_t * init_pointer_evdev(lv_display_t * display)
     const char * input_device = getenv("LV_LINUX_EVDEV_POINTER_DEVICE");
 
     if(input_device == NULL) {
-        LV_LOG_USER("Using evdev automatic discovery.");
-        lv_evdev_discovery_start(discovery_cb, display);
-        return NULL;
+        /* Also check legacy env var */
+        input_device = getenv("LV_LINUX_EVDEV_POINTER_DEVICE_LEGACY");
     }
 
-    lv_indev_t * indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, input_device);
-
-    if(indev == NULL) {
-        return NULL;
+    if(input_device != NULL) {
+        /* Explicit device path */
+        lv_indev_t * indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, input_device);
+        if(indev != NULL) {
+            lv_indev_set_display(indev, display);
+            set_mouse_cursor_icon(indev, display);
+            LV_LOG_USER("evdev pointer: %s", input_device);
+            return indev;
+        }
+        LV_LOG_WARN("Failed to open %s, trying fallback", input_device);
     }
 
-    lv_indev_set_display(indev, display);
+    /*
+     * Try common touchscreen devices before falling back to auto discovery.
+     * Some touchscreens (e.g. gslx680) have KEY=0 which causes LVGL's
+     * auto discovery to miss them.
+     */
+    const char *fallbacks[] = {
+        "/dev/input/event0",
+        "/dev/input/event1",
+        "/dev/input/event2",
+        "/dev/input/touchscreen0",
+        NULL
+    };
 
-    set_mouse_cursor_icon(indev, display);
-    return indev;
+    for(int i = 0; fallbacks[i] != NULL; i++) {
+        if(access(fallbacks[i], R_OK) != 0) continue;
+
+        lv_indev_t * indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, fallbacks[i]);
+        if(indev != NULL) {
+            lv_indev_set_display(indev, display);
+            set_mouse_cursor_icon(indev, display);
+            LV_LOG_USER("evdev pointer (fallback): %s", fallbacks[i]);
+            return indev;
+        }
+    }
+
+    /* Last resort: auto discovery */
+    LV_LOG_USER("Using evdev automatic discovery");
+    lv_evdev_discovery_start(discovery_cb, display);
+    return NULL;
 }
 #endif /*#if LV_USE_EVDEV*/

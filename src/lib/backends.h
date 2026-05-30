@@ -74,6 +74,7 @@ typedef int (*backend_init_t)(backend_t *);
  **********************/
 
 /* Graphics backends */
+int backend_init_xosfb(backend_t * backend);
 int backend_init_fbdev(backend_t * backend);
 int backend_init_drm(backend_t * backend);
 int backend_init_sdl(backend_t * backend);
