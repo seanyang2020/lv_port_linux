@@ -86,7 +86,7 @@ static void configure_simulator(int argc, char ** argv)
     const char * env_h = getenv("LV_SIM_WINDOW_HEIGHT");
     /* Default values */
     settings.window_width = atoi(env_w ? env_w : "800");
-    settings.window_height = atoi(env_h ? env_h : "480");
+    settings.window_height = atoi(env_h ? env_h : "1280");
 
     /* Parse the command-line options. */
     while((opt = getopt(argc, argv, "b:fmW:H:R:BVh")) != -1) {

@@ -261,6 +261,21 @@ if (CONFIG_LV_USE_LINUX_FBDEV)
 
 endif()
 
+# ---- Baidu OAuth dependencies (for all configs) ----
+
+pkg_check_modules(LIBCURL REQUIRED libcurl)
+list(APPEND PKG_CONFIG_INC ${LIBCURL_INCLUDE_DIRS})
+list(APPEND PKG_CONFIG_LIB ${LIBCURL_LIBRARIES})
+
+pkg_check_modules(LIBCJSON REQUIRED libcjson)
+list(APPEND PKG_CONFIG_INC ${LIBCJSON_INCLUDE_DIRS})
+list(APPEND PKG_CONFIG_LIB ${LIBCJSON_LIBRARIES})
+
+# ARM toolchain libcjson links libssp (GCC runtime)
+if("$ENV{CC}" MATCHES "arm")
+    list(APPEND PKG_CONFIG_LIB -lssp)
+endif()
+
 if (CONFIG_LV_USE_GLFW)
 
     message("Including GLFW support")
@@ -403,6 +418,7 @@ file(GLOB LV_LINUX_SRC src/lib/*.c)
 set(LV_LINUX_INC src/lib)
 
 target_include_directories(lvgl PUBLIC ${PKG_CONFIG_INC})
+target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Library type is determined by BUILD_SHARED_LIBS (shared if ON, static if OFF)
 add_library(lvgl_linux ${LV_LINUX_SRC} ${LV_LINUX_BACKEND_SRC})
@@ -418,10 +434,10 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-add_executable(lvglsim src/main.c)
+add_executable(lvglsim src/main.c src/baidu_pan/baidu_oauth.c)
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
-target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux)
+target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux ${PKG_CONFIG_LIB})
 
 if(WERROR)
     target_compile_options(lvglsim PRIVATE -Werror)

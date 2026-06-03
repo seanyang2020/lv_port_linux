@@ -1,4 +1,9 @@
 
+LV_COLOR_DEPTH       32
+
+# PNG decoding for QR code display
+LV_USE_LODEPNG        1
+
 LV_USE_SDL      1
 LV_SDL_RENDER_MODE      LV_DISPLAY_RENDER_MODE_DIRECT   /**< LV_DISPLAY_RENDER_MODE_DIRECT is recommended for best performance */
 LV_SDL_BUF_COUNT        1    /**< 1 or 2 */

@@ -2,6 +2,10 @@
 # Usage: cmake -B build -DCONFIG=xosfb && make -C build
 
 LV_COLOR_DEPTH       32
+
+# Enable PNG/JPG decoding for QR code and image display
+LV_USE_LODEPNG        1
+LV_USE_LIBJPEG_TURBO  1
 LV_USE_LINUX_FBDEV    1
 
 # XOSFB backend uses FBIOPAN_DISPLAY — DIRECT mode recommended
