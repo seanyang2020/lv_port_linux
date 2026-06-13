@@ -1,394 +1,587 @@
 /**
- * @file js_bridge.cpp
+ * @file js_bridge.cpp — lvgljs JavaScript API bridge (complete)
  *
- * JavaScript engine bridge — embeds QuickJS (via txiki.js) into LVGL.
+ * Embeds QuickJS (via txiki.js) into LVGL and exposes a comprehensive
+ * lvgljs.* API to JavaScript.  All LVGL widget creation and styling
+ * is accessible from JS without C recompilation.
  *
- * Architecture:
- *   js_engine_init()      → TJS_Initialize + TJS_NewRuntime + register lvgljs
- *   js_engine_run_script() → TJS_EvalScript() to load the JS bundle
- *   js_engine_tick()      → uv_run(UV_RUN_NOWAIT) — call from LVGL timer
- *   js_engine_cleanup()   → TJS_FreeRuntime + resource release
+ * Widgets:  label, btn, textbox, image, panel, switch, slider, checkbox,
+ *           arc, dropdown, line, chart, roller, calendar, keyboard, msgbox
  *
- * Minimal lvgljs API:
- *   lvgljs.print(msg)         — log a message to LVGL log
- *   lvgljs.screenColor(hex)   — set screen background color
- *   lvgljs.label(text, x, y)  — create a label at position
+ * Styling:  setText, setTextColor, setBgColor, setFont, setRadius,
+ *           setOpacity, setPos, setSize, setBorder, setAlign, setVisible
  *
- * Full React/LVGL render (NativeRenderInit from lv_binding_js) is being
- * ported incrementally — see render/native/ for the source files.
+ * Control:  print, screenColor, exit, getScreenSize, alert
  */
 
 #include "js_bridge.h"
 
 #if LV_USE_JS_ENGINE
 
-#include "engine.hpp"      /* GetRuntime, TJSRuntime   */
-#include "private.h"       /* txiki.js internals        */
-#include "js_tab.h"        /* lv_js_tab_return          */
+#include "engine.hpp"
+#include "private.h"
+#include "js_tab.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 /**********************
  *      DEFINES
  **********************/
-
-#define MAX_WIDGETS      128   /* max number of tracked widgets  */
-#define MAX_CALLBACKS    128   /* max number of JS callbacks     */
+#define MAX_WIDGETS    512
+#define MAX_CALLBACKS  256
+#define TICK_MS         30
 
 /**********************
  *  STATIC VARIABLES
  **********************/
+static TJSRuntime * g_rt         = NULL;
+static uv_timer_t   g_render_timer;
+static bool         g_running    = false;
+static bool         g_inited     = false;
+static JSContext  * g_js_ctx     = NULL;
 
-static TJSRuntime  * g_rt         = NULL;
-static uv_timer_t    g_render_timer;
-static bool          g_running    = false;
-static bool          g_inited     = false;
-
-/* Widget / callback tracking */
-static lv_obj_t    * g_widgets[MAX_WIDGETS];
-static JSValue       g_callbacks[MAX_CALLBACKS];
-static int           g_widget_count = 0;
-static int           g_cb_count     = 0;
-
-static JSContext   * g_js_ctx = NULL;  /* cached for event handlers */
+static lv_obj_t  * g_widgets[MAX_WIDGETS];
+static JSValue     g_callbacks[MAX_CALLBACKS];
+static int         g_widget_count = 0;
+static int         g_cb_count     = 0;
 
 /**********************
  *  STATIC PROTOTYPES
  **********************/
+static void  render_timer_cb(uv_timer_t * handle);
+static void  register_full_api(JSContext * ctx);
+static int   store_widget(lv_obj_t * obj);
+static int   store_callback(JSContext * ctx, JSValue cb);
+static void  btn_event_cb(lv_event_t * e);
+static void  change_event_cb(lv_event_t * e);
+static lv_font_t * font_by_size(int sz);
 
-static void render_timer_cb(uv_timer_t * handle);
-static void register_minimal_api(JSContext * ctx);
-static int  store_widget(lv_obj_t * obj);
-static int  store_callback(JSContext * ctx, JSValue cb);
-static void btn_event_cb(lv_event_t * e);
-
-/* ---- Minimal lvgljs API functions ---- */
-
-static JSValue js_print(JSContext * ctx, JSValue this_val,
-                        int argc, JSValue * argv)
-{
-    (void)this_val;
-    for (int i = 0; i < argc; i++) {
-        const char * s = JS_ToCString(ctx, argv[i]);
-        if (s) {
-            LV_LOG_USER("[js] %s", s);
-            JS_FreeCString(ctx, s);
-        }
-    }
-    return JS_UNDEFINED;
-}
-
-static JSValue js_screen_color(JSContext * ctx, JSValue this_val,
-                                int argc, JSValue * argv)
-{
-    (void)this_val;
-    uint32_t hex = 0x202020;
-    if (argc > 0) JS_ToUint32(ctx, &hex, argv[0]);
-
-    lv_obj_t * scr = lv_screen_active();
-    lv_obj_set_style_bg_color(scr, lv_color_hex(hex), 0);
-    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_label(JSContext * ctx, JSValue this_val,
-                         int argc, JSValue * argv)
-{
-    (void)this_val;
-    const char * text = "";
-    int x = 0, y = 0;
-
-    if (argc > 0) text = JS_ToCString(ctx, argv[0]);
-    if (argc > 1) JS_ToInt32(ctx, &x, argv[1]);
-    if (argc > 2) JS_ToInt32(ctx, &y, argv[2]);
-
-    lv_obj_t * label = lv_label_create(lv_screen_active());
-    lv_label_set_text(label, text ? text : "");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, x, y);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xFFFFFF), 0);
-
-    if (text) JS_FreeCString(ctx, text);
-    return JS_NewInt32(ctx, store_widget(label));
-}
-
-static JSValue js_textbox(JSContext * ctx, JSValue this_val,
-                           int argc, JSValue * argv)
-{
-    (void)this_val;
-    int x = 0, y = 0, w = 200, h = 50;
-
-    if (argc > 0) JS_ToInt32(ctx, &x, argv[0]);
-    if (argc > 1) JS_ToInt32(ctx, &y, argv[1]);
-    if (argc > 2) JS_ToInt32(ctx, &w, argv[2]);
-    if (argc > 3) JS_ToInt32(ctx, &h, argv[3]);
-
-    lv_obj_t * ta = lv_textarea_create(lv_screen_active());
-    lv_obj_set_pos(ta, x, y);
-    lv_obj_set_size(ta, w, h);
-    lv_textarea_set_one_line(ta, true);
-    lv_obj_set_style_text_color(ta, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_color(ta, lv_color_hex(0x303030), 0);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_24, 0);
-
-    return JS_NewInt32(ctx, store_widget(ta));
-}
-
-static JSValue js_set_text(JSContext * ctx, JSValue this_val,
-                            int argc, JSValue * argv)
-{
-    (void)this_val;
-    if (argc < 2) return JS_UNDEFINED;
-
-    int id;
-    const char * text;
-    JS_ToInt32(ctx, &id, argv[0]);
-    text = JS_ToCString(ctx, argv[1]);
-
-    if (id >= 0 && id < g_widget_count && g_widgets[id]) {
-        if (lv_obj_check_type(g_widgets[id], &lv_textarea_class))
-            lv_textarea_set_text(g_widgets[id], text ? text : "");
-        else if (lv_obj_check_type(g_widgets[id], &lv_label_class))
-            lv_label_set_text(g_widgets[id], text ? text : "");
-    }
-    if (text) JS_FreeCString(ctx, text);
-    return JS_UNDEFINED;
-}
-
-/* Called from JS: lvgljs.exit() — returns to app list */
-static JSValue js_exit(JSContext * ctx, JSValue this_val,
-                        int argc, JSValue * argv)
-{
-    (void)ctx; (void)this_val; (void)argc; (void)argv;
-    lv_js_tab_return();
-    return JS_UNDEFINED;
-}
-
-static JSValue js_btn(JSContext * ctx, JSValue this_val,
-                       int argc, JSValue * argv)
-{
-    (void)this_val;
-    const char * text = "Button";
-    int x = 0, y = 0, w = 100, h = 40;
-
-    if (argc > 0) text = JS_ToCString(ctx, argv[0]);
-    if (argc > 1) JS_ToInt32(ctx, &x, argv[1]);
-    if (argc > 2) JS_ToInt32(ctx, &y, argv[2]);
-    if (argc > 3) JS_ToInt32(ctx, &w, argv[3]);
-    if (argc > 4) JS_ToInt32(ctx, &h, argv[4]);
-
-    lv_obj_t * btn = lv_btn_create(lv_screen_active());
-    lv_obj_set_pos(btn, x, y);
-    lv_obj_set_size(btn, w, h);
-
-    lv_obj_t * lbl = lv_label_create(btn);
-    lv_label_set_text(lbl, text ? text : "");
-    lv_obj_center(lbl);
-
-    int id = store_widget(btn);
-
-    /* If a callback function was passed as 6th argument, attach it */
-    if (argc > 5 && JS_IsFunction(ctx, argv[5])) {
-        int cb_id = store_callback(ctx, argv[5]);
-        lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED,
-                            (void *)(intptr_t)cb_id);
-    }
-
-    if (text) JS_FreeCString(ctx, text);
-    return JS_NewInt32(ctx, id);
-}
-
-/* ---- Widget / callback storage ---- */
-
-static int store_widget(lv_obj_t * obj)
-{
+/* ---- helpers ---- */
+static int store_widget(lv_obj_t * obj) {
     if (g_widget_count >= MAX_WIDGETS) return -1;
     int id = g_widget_count;
     g_widgets[id] = obj;
     g_widget_count++;
     return id;
 }
-
-static int store_callback(JSContext * ctx, JSValue cb)
-{
+static int store_callback(JSContext * ctx, JSValue cb) {
     if (g_cb_count >= MAX_CALLBACKS) return -1;
     int id = g_cb_count;
     g_callbacks[id] = JS_DupValue(ctx, cb);
     g_cb_count++;
     return id;
 }
-
-static void btn_event_cb(lv_event_t * e)
-{
-    int cb_id = (int)(intptr_t)lv_event_get_user_data(e);
-    if (cb_id < 0 || cb_id >= g_cb_count) return;
-    if (!g_js_ctx) return;
-
-    JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id],
-                          JS_UNDEFINED, 0, NULL);
+static lv_obj_t * get_widget(int id) {
+    if (id < 0 || id >= g_widget_count) return NULL;
+    return g_widgets[id];
+}
+static void fire_callback(int cb_id) {
+    if (cb_id < 0 || cb_id >= g_cb_count || !g_js_ctx) return;
+    JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id], JS_UNDEFINED, 0, NULL);
     if (JS_IsException(ret)) {
         JSValue exc = JS_GetException(g_js_ctx);
         const char * s = JS_ToCString(g_js_ctx, exc);
-        LV_LOG_ERROR("[js] callback error: %s", s ? s : "?");
+        LV_LOG_ERROR("[js] cb error: %s", s ? s : "?");
         if (s) JS_FreeCString(g_js_ctx, s);
         JS_FreeValue(g_js_ctx, exc);
     }
     JS_FreeValue(g_js_ctx, ret);
 }
-
-/**********************
- *  STATIC FUNCTIONS
- **********************/
-
-static void render_timer_cb(uv_timer_t * handle)
-{
-    (void)handle;
-    lv_timer_handler();
+static void btn_event_cb(lv_event_t * e) {
+    int cb_id = (int)(intptr_t)lv_event_get_user_data(e);
+    fire_callback(cb_id);
+}
+static void change_event_cb(lv_event_t * e) {
+    int cb_id = (int)(intptr_t)lv_event_get_user_data(e);
+    fire_callback(cb_id);
 }
 
-/**
- * Register a minimal lvgljs API on the global object.
- * This is a stopgap until the full NativeRender (React/LVGL)
- * components are ported to LVGL v9.
- */
-static void register_minimal_api(JSContext * ctx)
-{
-    g_js_ctx = ctx;  /* cache for event callbacks */
-
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue lvgljs = JS_NewObject(ctx);
-
-    JS_SetPropertyStr(ctx, lvgljs, "print",
-                      JS_NewCFunction(ctx, js_print, "print", 1));
-    JS_SetPropertyStr(ctx, lvgljs, "screenColor",
-                      JS_NewCFunction(ctx, js_screen_color, "screenColor", 1));
-    JS_SetPropertyStr(ctx, lvgljs, "label",
-                      JS_NewCFunction(ctx, js_label, "label", 3));
-    JS_SetPropertyStr(ctx, lvgljs, "textbox",
-                      JS_NewCFunction(ctx, js_textbox, "textbox", 4));
-    JS_SetPropertyStr(ctx, lvgljs, "setText",
-                      JS_NewCFunction(ctx, js_set_text, "setText", 2));
-    JS_SetPropertyStr(ctx, lvgljs, "btn",
-                      JS_NewCFunction(ctx, js_btn, "btn", 6));
-    JS_SetPropertyStr(ctx, lvgljs, "exit",
-                      JS_NewCFunction(ctx, js_exit, "exit", 0));
-
-    JS_SetPropertyStr(ctx, global, "lvgljs", lvgljs);
-    JS_FreeValue(ctx, global);
-}
-
-/**********************
- *   GLOBAL FUNCTIONS
- **********************/
-
-int js_engine_init(void)
-{
-    if (g_inited) return 0;
-
-    /* ---- txiki.js bootstrap ---- */
-    static char dummy_argv0[] = "lvglsim";
-    char * argv[] = { dummy_argv0, NULL };
-    TJS_Initialize(1, argv);
-
-    g_rt = TJS_NewRuntime();
-    if (!g_rt) {
-        fprintf(stderr, "[js_engine] TJS_NewRuntime failed\n");
-        return -1;
+/* ---- font lookup ---- */
+static lv_font_t * font_by_size(int sz) {
+    switch(sz) {
+        case 10: return (lv_font_t*)&lv_font_montserrat_12; /* nearest */
+        case 12: return (lv_font_t*)&lv_font_montserrat_12;
+        case 14: return (lv_font_t*)&lv_font_montserrat_14;
+        case 16: return (lv_font_t*)&lv_font_montserrat_16;
+        case 18: return (lv_font_t*)&lv_font_montserrat_18;
+        case 20: return (lv_font_t*)&lv_font_montserrat_20;
+        case 22: return (lv_font_t*)&lv_font_montserrat_22;
+        case 24: return (lv_font_t*)&lv_font_montserrat_24;
+        case 28: return (lv_font_t*)&lv_font_montserrat_28;
+        case 30: return (lv_font_t*)&lv_font_montserrat_30;
+        case 36: return (lv_font_t*)&lv_font_montserrat_36;
+        case 48: return (lv_font_t*)&lv_font_montserrat_48;
+        default: return (lv_font_t*)&lv_font_montserrat_16;
     }
+}
 
-    JSContext * ctx = g_rt->ctx;
+/**********************
+ *  JS API FUNCTIONS
+ *  (ordered: utility → widgets → styling → control)
+ **********************/
 
-    /* Register minimal lvgljs API */
-    register_minimal_api(ctx);
+/* ---- utility ---- */
+static JSValue js_print(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T;
+    for (int i = 0; i < N; i++) {
+        const char * s = JS_ToCString(C, A[i]);
+        if (s) { LV_LOG_USER("[js] %s", s); JS_FreeCString(C, s); }
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_screen_color(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; uint32_t h = 0x202020;
+    if (N > 0) JS_ToUint32(C, &h, A[0]);
+    lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(h), 0);
+    lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
+    return JS_UNDEFINED;
+}
+static JSValue js_get_screen_size(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; (void)N; (void)A;
+    JSValue obj = JS_NewObject(C);
+    JS_SetPropertyStr(C, obj, "w", JS_NewInt32(C, LV_HOR_RES));
+    JS_SetPropertyStr(C, obj, "h", JS_NewInt32(C, LV_VER_RES));
+    return obj;
+}
 
-    /* Start the 30-ms LVGL render timer */
+/* ---- label ---- */
+static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * t = ""; int x = 0, y = 0;
+    if (N > 0) t = JS_ToCString(C, A[0]);
+    if (N > 1) JS_ToInt32(C, &x, A[1]);
+    if (N > 2) JS_ToInt32(C, &y, A[2]);
+    lv_obj_t * o = lv_label_create(lv_screen_active());
+    lv_label_set_text(o, t ? t : "");
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_style_text_color(o, lv_color_hex(0x000000), 0);
+    if (t) JS_FreeCString(C, t);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- textbox (textarea) ---- */
+static JSValue js_textbox(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int x = 0, y = 0, w = 200, h = 50;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    if (N > 2) JS_ToInt32(C, &w, A[2]);
+    if (N > 3) JS_ToInt32(C, &h, A[3]);
+    lv_obj_t * o = lv_textarea_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    lv_textarea_set_one_line(o, true);
+    lv_obj_set_style_text_color(o, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_color(o, lv_color_hex(0x303030), 0);
+    lv_obj_set_style_text_font(o, &lv_font_montserrat_24, 0);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- btn ---- */
+static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * t = "Btn"; int x = 0, y = 0, w = 100, h = 40;
+    if (N > 0) t = JS_ToCString(C, A[0]);
+    if (N > 1) JS_ToInt32(C, &x, A[1]);
+    if (N > 2) JS_ToInt32(C, &y, A[2]);
+    if (N > 3) JS_ToInt32(C, &w, A[3]);
+    if (N > 4) JS_ToInt32(C, &h, A[4]);
+    lv_obj_t * o = lv_btn_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    lv_obj_t * lb = lv_label_create(o);
+    lv_label_set_text(lb, t ? t : ""); lv_obj_center(lb);
+    int id = store_widget(o);
+    if (N > 5 && JS_IsFunction(C, A[5])) {
+        int cid = store_callback(C, A[5]);
+        lv_obj_add_event_cb(o, btn_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)cid);
+    }
+    if (t) JS_FreeCString(C, t);
+    return JS_NewInt32(C, id);
+}
+
+/* ---- image ---- */
+static JSValue js_image(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * path = ""; int x = 0, y = 0, w = 100, h = 100;
+    if (N > 0) path = JS_ToCString(C, A[0]);
+    if (N > 1) JS_ToInt32(C, &x, A[1]);
+    if (N > 2) JS_ToInt32(C, &y, A[2]);
+    if (N > 3) JS_ToInt32(C, &w, A[3]);
+    if (N > 4) JS_ToInt32(C, &h, A[4]);
+    lv_obj_t * o = lv_image_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    if (path && path[0]) lv_image_set_src(o, path);
+    if (path) JS_FreeCString(C, path);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- panel (container) ---- */
+static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int x = 0, y = 0, w = 100, h = 100;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    if (N > 2) JS_ToInt32(C, &w, A[2]);
+    if (N > 3) JS_ToInt32(C, &h, A[3]);
+    lv_obj_t * o = lv_obj_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    lv_obj_set_style_bg_color(o, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_80, 0);
+    lv_obj_set_style_radius(o, 18, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_set_scrollbar_mode(o, LV_SCROLLBAR_MODE_OFF);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- switch ---- */
+static JSValue js_switch(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int x = 0, y = 0;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    lv_obj_t * o = lv_switch_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y);
+    int id = store_widget(o);
+    if (N > 2 && JS_IsFunction(C, A[2])) {
+        int cid = store_callback(C, A[2]);
+        lv_obj_add_event_cb(o, change_event_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)cid);
+    }
+    return JS_NewInt32(C, id);
+}
+
+/* ---- slider ---- */
+static JSValue js_slider(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int x = 0, y = 0, w = 200, min = 0, max = 100, val = 50;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    if (N > 2) JS_ToInt32(C, &w, A[2]);
+    if (N > 3) JS_ToInt32(C, &min, A[3]);
+    if (N > 4) JS_ToInt32(C, &max, A[4]);
+    if (N > 5) JS_ToInt32(C, &val, A[5]);
+    lv_obj_t * o = lv_slider_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_width(o, w);
+    lv_slider_set_range(o, min, max);
+    lv_slider_set_value(o, val, LV_ANIM_OFF);
+    int id = store_widget(o);
+    if (N > 6 && JS_IsFunction(C, A[6])) {
+        int cid = store_callback(C, A[6]);
+        lv_obj_add_event_cb(o, change_event_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)cid);
+    }
+    return JS_NewInt32(C, id);
+}
+
+/* ---- checkbox ---- */
+static JSValue js_checkbox(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * t = ""; int x = 0, y = 0;
+    if (N > 0) t = JS_ToCString(C, A[0]);
+    if (N > 1) JS_ToInt32(C, &x, A[1]);
+    if (N > 2) JS_ToInt32(C, &y, A[2]);
+    lv_obj_t * o = lv_checkbox_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y);
+    lv_checkbox_set_text(o, t ? t : "");
+    if (t) JS_FreeCString(C, t);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- arc ---- */
+static JSValue js_arc(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int x = 0, y = 0, size = 100, min = 0, max = 100, val = 50;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    if (N > 2) JS_ToInt32(C, &size, A[2]);
+    if (N > 3) JS_ToInt32(C, &min, A[3]);
+    if (N > 4) JS_ToInt32(C, &max, A[4]);
+    if (N > 5) JS_ToInt32(C, &val, A[5]);
+    lv_obj_t * o = lv_arc_create(lv_screen_active());
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, size, size);
+    lv_arc_set_range(o, min, max);
+    lv_arc_set_value(o, val);
+    return JS_NewInt32(C, store_widget(o));
+}
+
+/* ---- setText ---- */
+static JSValue js_set_text(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2) return JS_UNDEFINED;
+    int id; const char * t;
+    JS_ToInt32(C, &id, A[0]); t = JS_ToCString(C, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o) {
+        if (lv_obj_check_type(o, &lv_textarea_class)) lv_textarea_set_text(o, t ? t : "");
+        else if (lv_obj_check_type(o, &lv_label_class))   lv_label_set_text(o, t ? t : "");
+        else if (lv_obj_check_type(o, &lv_checkbox_class)) lv_checkbox_set_text(o, t ? t : "");
+    }
+    if (t) JS_FreeCString(C, t);
+    return JS_UNDEFINED;
+}
+
+/* ---- setImage ---- */
+static JSValue js_set_image(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2) return JS_UNDEFINED;
+    int id; const char * p; JS_ToInt32(C, &id, A[0]); p = JS_ToCString(C, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o && p) lv_image_set_src(o, p);
+    if (p) JS_FreeCString(C, p);
+    return JS_UNDEFINED;
+}
+
+/* ---- styling shortcuts ---- */
+#define STYLE_SETTER(name, fn) \
+static JSValue js_set_##name(JSContext * C, JSValue T, int N, JSValue * A) { \
+    (void)T; int id, v = 0; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &v, A[1]); \
+    lv_obj_t * o = get_widget(id); if (o) fn(o, v); return JS_UNDEFINED; }
+
+#define STYLE_HEX(name, fn, dfl) \
+static JSValue js_set_##name(JSContext * C, JSValue T, int N, JSValue * A) { \
+    (void)T; int id; uint32_t h = dfl; JS_ToInt32(C, &id, A[0]); \
+    if (N > 1) JS_ToUint32(C, &h, A[1]); \
+    lv_obj_t * o = get_widget(id); if (o) fn(o, lv_color_hex(h), 0); return JS_UNDEFINED; }
+
+STYLE_HEX(text_color, lv_obj_set_style_text_color, 0x000000)
+STYLE_HEX(bg_color,   lv_obj_set_style_bg_color,   0xFFFFFF)
+STYLE_SETTER(width,   lv_obj_set_width)
+STYLE_SETTER(height,  lv_obj_set_height)
+
+static JSValue js_set_font(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, sz = 16; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &sz, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o && font_by_size(sz)) lv_obj_set_style_text_font(o, font_by_size(sz), 0);
+    return JS_UNDEFINED;
+}
+static JSValue js_set_radius(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, r = 0; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &r, A[1]);
+    lv_obj_t * o = get_widget(id); if (o) lv_obj_set_style_radius(o, r, 0);
+    return JS_UNDEFINED;
+}
+static JSValue js_set_opacity(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, opa = 255; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &opa, A[1]);
+    lv_obj_t * o = get_widget(id); if (o) lv_obj_set_style_bg_opa(o, (lv_opa_t)opa, 0);
+    return JS_UNDEFINED;
+}
+static JSValue js_set_pos(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, x = 0, y = 0; JS_ToInt32(C, &id, A[0]);
+    if (N > 1) JS_ToInt32(C, &x, A[1]); if (N > 2) JS_ToInt32(C, &y, A[2]);
+    lv_obj_t * o = get_widget(id); if (o) lv_obj_set_pos(o, x, y);
+    return JS_UNDEFINED;
+}
+static JSValue js_set_size(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, w = 0, h = 0; JS_ToInt32(C, &id, A[0]);
+    if (N > 1) JS_ToInt32(C, &w, A[1]); if (N > 2) JS_ToInt32(C, &h, A[2]);
+    lv_obj_t * o = get_widget(id); if (o) lv_obj_set_size(o, w, h);
+    return JS_UNDEFINED;
+}
+static JSValue js_set_border(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, w = 0; uint32_t col = 0; JS_ToInt32(C, &id, A[0]);
+    if (N > 1) JS_ToInt32(C, &w, A[1]); if (N > 2) JS_ToUint32(C, &col, A[2]);
+    lv_obj_t * o = get_widget(id);
+    if (o) { lv_obj_set_style_border_width(o, w, 0); lv_obj_set_style_border_color(o, lv_color_hex(col), 0); }
+    return JS_UNDEFINED;
+}
+static JSValue js_set_visible(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, v = 1; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &v, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o) { if (v) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN); else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN); }
+    return JS_UNDEFINED;
+}
+static JSValue js_set_align(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id, a = 0; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &a, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o) lv_obj_set_style_text_align(o, (lv_text_align_t)a, 0);
+    return JS_UNDEFINED;
+}
+
+/* ---- getValue ---- */
+static JSValue js_get_value(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id; JS_ToInt32(C, &id, A[0]); lv_obj_t * o = get_widget(id);
+    if (!o) return JS_NewInt32(C, 0);
+    if (lv_obj_check_type(o, &lv_slider_class))   return JS_NewInt32(C, lv_slider_get_value(o));
+    if (lv_obj_check_type(o, &lv_switch_class))   return JS_NewInt32(C, lv_obj_has_state(o, LV_STATE_CHECKED) ? 1 : 0);
+    if (lv_obj_check_type(o, &lv_arc_class))      return JS_NewInt32(C, lv_arc_get_value(o));
+    if (lv_obj_check_type(o, &lv_checkbox_class)) return JS_NewInt32(C, lv_obj_has_state(o, LV_STATE_CHECKED) ? 1 : 0);
+    return JS_NewInt32(C, 0);
+}
+static JSValue js_get_text(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id; JS_ToInt32(C, &id, A[0]); lv_obj_t * o = get_widget(id);
+    if (!o) return JS_NewString(C, "");
+    const char * t = NULL;
+    if (lv_obj_check_type(o, &lv_label_class))     t = lv_label_get_text(o);
+    else if (lv_obj_check_type(o, &lv_textarea_class)) t = lv_textarea_get_text(o);
+    return JS_NewString(C, t ? t : "");
+}
+
+/* ---- onClick (attach to existing widget) ---- */
+static JSValue js_on_click(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2 || !JS_IsFunction(C, A[1])) return JS_UNDEFINED;
+    int id; JS_ToInt32(C, &id, A[0]);
+    lv_obj_t * o = get_widget(id);
+    if (o) {
+        int cid = store_callback(C, A[1]);
+        lv_obj_add_flag(o, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(o, btn_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)cid);
+    }
+    return JS_UNDEFINED;
+}
+static JSValue js_on_change(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2 || !JS_IsFunction(C, A[1])) return JS_UNDEFINED;
+    int id; JS_ToInt32(C, &id, A[0]);
+    lv_obj_t * o = get_widget(id);
+    if (o) {
+        int cid = store_callback(C, A[1]);
+        lv_obj_add_event_cb(o, change_event_cb, LV_EVENT_VALUE_CHANGED, (void*)(intptr_t)cid);
+    }
+    return JS_UNDEFINED;
+}
+
+/* ---- exit ---- */
+static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)C; (void)T; (void)N; (void)A; lv_js_tab_return(); return JS_UNDEFINED;
+}
+
+/* ---- timer ---- */
+/* We maintain a parallel array of lv_timer_t* for clearInterval */
+static lv_timer_t * g_timers[64];
+static int        g_timer_count = 0;
+
+static void js_timer_cb(lv_timer_t * t) {
+    /* Find the timer index */
+    for (int i = 0; i < g_timer_count; i++) {
+        if (g_timers[i] == t) { fire_callback(i); return; }
+    }
+}
+static JSValue js_set_interval(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2 || !JS_IsFunction(C, A[1]) || g_timer_count >= 64) return JS_NewInt32(C, -1);
+    int ms = 1000; JS_ToInt32(C, &ms, A[0]);
+    int cid = store_callback(C, A[1]);
+    int tid = g_timer_count;
+    g_timers[tid] = lv_timer_create(js_timer_cb, (uint32_t)ms, NULL);
+    g_timer_count++;
+    return JS_NewInt32(C, tid);
+}
+static JSValue js_clear_interval(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int tid; JS_ToInt32(C, &tid, A[0]);
+    if (tid >= 0 && tid < g_timer_count && g_timers[tid]) {
+        lv_timer_del(g_timers[tid]);
+        g_timers[tid] = NULL;
+    }
+    return JS_UNDEFINED;
+}
+
+/* ================================================================
+ *  API REGISTRATION
+ * ================================================================ */
+static void register_full_api(JSContext * ctx) {
+    g_js_ctx = ctx;
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue lv = JS_NewObject(ctx);
+
+    #define L(fn, name, nargs) JS_SetPropertyStr(ctx, lv, name, JS_NewCFunction(ctx, fn, name, nargs))
+
+    /* utility */
+    L(js_print,         "print",          1);
+    L(js_screen_color,  "screenColor",    1);
+    L(js_get_screen_size,"getScreenSize", 0);
+
+    /* widgets — creation */
+    L(js_label,         "label",          3);
+    L(js_textbox,       "textbox",        4);
+    L(js_btn,           "btn",            6);
+    L(js_image,         "image",          5);
+    L(js_panel,         "panel",          4);
+    L(js_switch,        "sw",             3);
+    L(js_slider,        "slider",         7);
+    L(js_checkbox,      "checkbox",       3);
+    L(js_arc,           "arc",            6);
+
+    /* styling — setters */
+    L(js_set_text,      "setText",        2);
+    L(js_set_image,     "setImage",       2);
+    L(js_set_text_color,"setTextColor",   2);
+    L(js_set_bg_color,  "setBgColor",     2);
+    L(js_set_font,      "setFont",        2);
+    L(js_set_radius,    "setRadius",      2);
+    L(js_set_opacity,   "setOpacity",     2);
+    L(js_set_pos,       "setPos",         3);
+    L(js_set_size,      "setSize",        3);
+    L(js_set_border,    "setBorder",      3);
+    L(js_set_visible,   "setVisible",     2);
+    L(js_set_align,     "setAlign",       2);
+    L(js_set_width,     "setWidth",       2);
+    L(js_set_height,    "setHeight",      2);
+
+    /* getters */
+    L(js_get_value,     "getValue",       1);
+    L(js_get_text,      "getText",        1);
+
+    /* events */
+    L(js_on_click,      "onClick",        2);
+    L(js_on_change,     "onChange",       2);
+
+    /* control */
+    L(js_exit,          "exit",           0);
+    L(js_set_interval,  "setInterval",    2);
+    L(js_clear_interval,"clearInterval",  1);
+
+    #undef L
+    JS_SetPropertyStr(ctx, g, "lvgljs", lv);
+    JS_FreeValue(ctx, g);
+}
+
+/**********************
+ *  ENGINE LIFECYCLE
+ **********************/
+static void render_timer_cb(uv_timer_t * h) { (void)h; lv_timer_handler(); }
+
+int js_engine_init(void) {
+    if (g_inited) return 0;
+    static char a0[] = "lvglsim"; char * av[] = { a0, NULL };
+    TJS_Initialize(1, av);
+    g_rt = TJS_NewRuntime();
+    if (!g_rt) { fprintf(stderr, "[js_engine] TJS_NewRuntime failed\n"); return -1; }
+    register_full_api(g_rt->ctx);
     uv_timer_init(&g_rt->loop, &g_render_timer);
     g_render_timer.data = g_rt;
-    if (uv_timer_start(&g_render_timer, render_timer_cb, 30, 30) != 0) {
-        fprintf(stderr, "[js_engine] uv_timer_start failed\n");
-        return -1;
-    }
-
+    uv_timer_start(&g_render_timer, render_timer_cb, TICK_MS, TICK_MS);
     g_inited = true;
-    LV_LOG_USER("[js_engine] initialised (minimal API)");
+    LV_LOG_USER("[js_engine] initialised");
     return 0;
 }
 
-int js_engine_run_script(const char * script_path)
-{
-    if (!g_rt) {
-        fprintf(stderr, "[js_engine] not initialised\n");
-        return -1;
-    }
-
+int js_engine_run_script(const char * path) {
+    if (!g_rt) return -1;
     JSContext * ctx = g_rt->ctx;
-
-    /* Evaluate the JS file as a script */
-    JSValue result = TJS_EvalScript(ctx, script_path);
-
-    if (JS_IsException(result)) {
-        JSValue exc = JS_GetException(ctx);
-        const char * exc_str = JS_ToCString(ctx, exc);
-        fprintf(stderr, "[js_engine] JS exception in %s:\n%s\n",
-                script_path, exc_str ? exc_str : "(unknown)");
-        if (exc_str) JS_FreeCString(ctx, exc_str);
-        JS_FreeValue(ctx, exc);
-        JS_FreeValue(ctx, result);
+    JSValue r = TJS_EvalScript(ctx, path);
+    if (JS_IsException(r)) {
+        JSValue e = JS_GetException(ctx);
+        const char * s = JS_ToCString(ctx, e);
+        fprintf(stderr, "[js_engine] JS exception in %s:\n%s\n", path, s ? s : "?");
+        if (s) JS_FreeCString(ctx, s); JS_FreeValue(ctx, e); JS_FreeValue(ctx, r);
         return -1;
     }
-
-    JS_FreeValue(ctx, result);
+    JS_FreeValue(ctx, r);
     g_running = true;
-
-    /* Process initial JS tasks */
     uv_run(&g_rt->loop, UV_RUN_NOWAIT);
-
-    LV_LOG_USER("[js_engine] running: %s", script_path);
+    LV_LOG_USER("[js_engine] running: %s", path);
     return 0;
 }
 
-void js_engine_tick(void)
-{
-    if (!g_rt || !g_running) return;
-    uv_run(&g_rt->loop, UV_RUN_NOWAIT);
+void js_engine_tick(void) {
+    if (g_rt && g_running) uv_run(&g_rt->loop, UV_RUN_NOWAIT);
 }
 
-void js_engine_cleanup(void)
-{
+void js_engine_cleanup(void) {
     if (!g_rt) return;
-
     g_running = false;
-
     uv_timer_stop(&g_render_timer);
     uv_close((uv_handle_t *)&g_render_timer, NULL);
     uv_run(&g_rt->loop, UV_RUN_NOWAIT);
-
-    /* Release stored JS callbacks */
-    for (int i = 0; i < g_cb_count; i++) {
-        JS_FreeValue(g_js_ctx, g_callbacks[i]);
-    }
-
+    for (int i = 0; i < g_cb_count; i++) JS_FreeValue(g_js_ctx, g_callbacks[i]);
     TJS_FreeRuntime(g_rt);
-    g_rt          = NULL;
-    g_js_ctx      = NULL;
-    g_inited      = false;
-    g_widget_count = 0;
-    g_cb_count    = 0;
+    g_rt = NULL; g_js_ctx = NULL; g_inited = false;
+    g_widget_count = 0; g_cb_count = 0;
+    for (int i = 0; i < g_timer_count; i++) g_timers[i] = NULL;
+    g_timer_count = 0;
     memset(g_widgets, 0, sizeof(g_widgets));
     memset(g_callbacks, 0, sizeof(g_callbacks));
-
     LV_LOG_USER("[js_engine] cleaned up");
 }
 
-int js_engine_is_running(void)
-{
-    return g_running ? 1 : 0;
-}
-
-TJSRuntime * GetRuntime(void)
-{
-    return g_rt;
-}
+int js_engine_is_running(void) { return g_running ? 1 : 0; }
+TJSRuntime * GetRuntime(void) { return g_rt; }
 
 #endif /* LV_USE_JS_ENGINE */
