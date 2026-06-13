@@ -257,19 +257,20 @@ static void return_to_list(void)
     }
     js_engine_cleanup();
 
-    /* Delete the JS screen (destroys all JS-created widgets) */
+    /* CRITICAL: restore previous screen BEFORE deleting js_screen.
+     * Deleting the active screen causes a segfault in LVGL. */
+    if (g_ctx.prev_screen) {
+        lv_screen_load(g_ctx.prev_screen);
+    }
+
+    /* Now safe to delete — js_screen is no longer active */
     if (g_ctx.js_screen) {
         lv_obj_delete(g_ctx.js_screen);
         g_ctx.js_screen = NULL;
     }
 
     g_ctx.back_btn = NULL;
-
-    /* Restore the original screen (widgets demo) */
-    if (g_ctx.prev_screen) {
-        lv_screen_load(g_ctx.prev_screen);
-        g_ctx.prev_screen = NULL;
-    }
+    g_ctx.prev_screen = NULL;
 }
 
 /**********************

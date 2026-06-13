@@ -78,6 +78,16 @@ static lv_obj_t * get_widget(int id) {
     if (id < 0 || id >= g_widget_count) return NULL;
     return g_widgets[id];
 }
+/* If last arg is an int (not a function), consume it as parent widget ID */
+static lv_obj_t * extract_parent(JSContext * C, int * pN, JSValue * A) {
+    int N = *pN;
+    if (N > 0 && JS_IsNumber(A[N-1])) {
+        int pid; JS_ToInt32(C, &pid, A[N-1]);
+        lv_obj_t * p = get_widget(pid);
+        if (p) { (*pN)--; return p; }
+    }
+    return lv_screen_active();
+}
 static void fire_callback(int cb_id) {
     if (cb_id < 0 || cb_id >= g_cb_count || !g_js_ctx) return;
     JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id], JS_UNDEFINED, 0, NULL);
@@ -149,11 +159,12 @@ static JSValue js_get_screen_size(JSContext * C, JSValue T, int N, JSValue * A) 
 
 /* ---- label ---- */
 static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; const char * t = ""; int x = 0, y = 0;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    const char * t = ""; int x = 0, y = 0;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
     if (N > 2) JS_ToInt32(C, &y, A[2]);
-    lv_obj_t * o = lv_label_create(lv_screen_active());
+    lv_obj_t * o = lv_label_create(p);
     lv_label_set_text(o, t ? t : "");
     lv_obj_set_pos(o, x, y);
     lv_obj_set_style_text_color(o, lv_color_hex(0x000000), 0);
@@ -163,12 +174,13 @@ static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- textbox (textarea) ---- */
 static JSValue js_textbox(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int x = 0, y = 0, w = 200, h = 50;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    int x = 0, y = 0, w = 200, h = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
     if (N > 2) JS_ToInt32(C, &w, A[2]);
     if (N > 3) JS_ToInt32(C, &h, A[3]);
-    lv_obj_t * o = lv_textarea_create(lv_screen_active());
+    lv_obj_t * o = lv_textarea_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
     lv_textarea_set_one_line(o, true);
     lv_obj_set_style_text_color(o, lv_color_hex(0xFFFFFF), 0);
@@ -179,13 +191,14 @@ static JSValue js_textbox(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- btn ---- */
 static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; const char * t = "Btn"; int x = 0, y = 0, w = 100, h = 40;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    const char * t = "Btn"; int x = 0, y = 0, w = 100, h = 40;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
     if (N > 2) JS_ToInt32(C, &y, A[2]);
     if (N > 3) JS_ToInt32(C, &w, A[3]);
     if (N > 4) JS_ToInt32(C, &h, A[4]);
-    lv_obj_t * o = lv_btn_create(lv_screen_active());
+    lv_obj_t * o = lv_btn_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
     lv_obj_t * lb = lv_label_create(o);
     lv_label_set_text(lb, t ? t : ""); lv_obj_center(lb);
@@ -200,13 +213,14 @@ static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- image ---- */
 static JSValue js_image(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; const char * path = ""; int x = 0, y = 0, w = 100, h = 100;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    const char * path = ""; int x = 0, y = 0, w = 100, h = 100;
     if (N > 0) path = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
     if (N > 2) JS_ToInt32(C, &y, A[2]);
     if (N > 3) JS_ToInt32(C, &w, A[3]);
     if (N > 4) JS_ToInt32(C, &h, A[4]);
-    lv_obj_t * o = lv_image_create(lv_screen_active());
+    lv_obj_t * o = lv_image_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
     if (path && path[0]) lv_image_set_src(o, path);
     if (path) JS_FreeCString(C, path);
@@ -215,12 +229,13 @@ static JSValue js_image(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- panel (container) ---- */
 static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int x = 0, y = 0, w = 100, h = 100;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    int x = 0, y = 0, w = 100, h = 100;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
     if (N > 2) JS_ToInt32(C, &w, A[2]);
     if (N > 3) JS_ToInt32(C, &h, A[3]);
-    lv_obj_t * o = lv_obj_create(lv_screen_active());
+    lv_obj_t * o = lv_obj_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
     lv_obj_set_style_bg_color(o, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_bg_opa(o, LV_OPA_80, 0);
@@ -233,10 +248,11 @@ static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- switch ---- */
 static JSValue js_switch(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int x = 0, y = 0;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    int x = 0, y = 0;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
-    lv_obj_t * o = lv_switch_create(lv_screen_active());
+    lv_obj_t * o = lv_switch_create(p);
     lv_obj_set_pos(o, x, y);
     int id = store_widget(o);
     if (N > 2 && JS_IsFunction(C, A[2])) {
@@ -248,14 +264,15 @@ static JSValue js_switch(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- slider ---- */
 static JSValue js_slider(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int x = 0, y = 0, w = 200, min = 0, max = 100, val = 50;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    int x = 0, y = 0, w = 200, min = 0, max = 100, val = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
     if (N > 2) JS_ToInt32(C, &w, A[2]);
     if (N > 3) JS_ToInt32(C, &min, A[3]);
     if (N > 4) JS_ToInt32(C, &max, A[4]);
     if (N > 5) JS_ToInt32(C, &val, A[5]);
-    lv_obj_t * o = lv_slider_create(lv_screen_active());
+    lv_obj_t * o = lv_slider_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_width(o, w);
     lv_slider_set_range(o, min, max);
     lv_slider_set_value(o, val, LV_ANIM_OFF);
@@ -269,11 +286,12 @@ static JSValue js_slider(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- checkbox ---- */
 static JSValue js_checkbox(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; const char * t = ""; int x = 0, y = 0;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    const char * t = ""; int x = 0, y = 0;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
     if (N > 2) JS_ToInt32(C, &y, A[2]);
-    lv_obj_t * o = lv_checkbox_create(lv_screen_active());
+    lv_obj_t * o = lv_checkbox_create(p);
     lv_obj_set_pos(o, x, y);
     lv_checkbox_set_text(o, t ? t : "");
     if (t) JS_FreeCString(C, t);
@@ -282,14 +300,15 @@ static JSValue js_checkbox(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- arc ---- */
 static JSValue js_arc(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int x = 0, y = 0, size = 100, min = 0, max = 100, val = 50;
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    int x = 0, y = 0, size = 100, min = 0, max = 100, val = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
     if (N > 2) JS_ToInt32(C, &size, A[2]);
     if (N > 3) JS_ToInt32(C, &min, A[3]);
     if (N > 4) JS_ToInt32(C, &max, A[4]);
     if (N > 5) JS_ToInt32(C, &val, A[5]);
-    lv_obj_t * o = lv_arc_create(lv_screen_active());
+    lv_obj_t * o = lv_arc_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, size, size);
     lv_arc_set_range(o, min, max);
     lv_arc_set_value(o, val);
