@@ -434,7 +434,112 @@ target_include_directories(lvgl_linux PUBLIC
 # Link LVGL with external dependencies - Modern CMake/CMP0079 allows this
 target_link_libraries(lvgl PUBLIC ${PKG_CONFIG_LIB} m pthread rt dl)
 
-add_executable(lvglsim src/main.c src/baidu_pan/baidu_oauth.c)
+# ---- JS Engine (feature-gated by LV_USE_JS_ENGINE) ----
+# Read the value from the LVGL config defaults file (same file that generates lv_conf.h)
+set(JS_ENGINE_CONFIG_FILE "${LV_CONF_DEFAULTS_PATH}")
+if(EXISTS "${JS_ENGINE_CONFIG_FILE}")
+    file(STRINGS "${JS_ENGINE_CONFIG_FILE}" _js_engine_line
+         REGEX "^LV_USE_JS_ENGINE[ \t]+")
+    if(_js_engine_line)
+        string(REGEX MATCH "[0-9]+" _js_engine_val "${_js_engine_line}")
+        if(_js_engine_val EQUAL 1)
+            set(LV_USE_JS_ENGINE_ENABLED ON)
+        endif()
+    endif()
+endif()
+
+if (LV_USE_JS_ENGINE_ENABLED)
+    message(STATUS "Including JS Engine support (QuickJS + libuv)")
+
+    # Global preprocessor macro — must be visible to all targets
+    # (lv_demo_widgets.c is compiled inside the lvgl submodule)
+    add_compile_definitions(LV_USE_JS_ENGINE=1)
+
+    # Enable C++ for the JS bridge (engine.cpp port)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 14)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    # ---- txiki.js (QuickJS + libuv runtime) ----
+    # Use system libffi instead of building from source (ExternalProject)
+    set(USE_EXTERNAL_FFI ON CACHE BOOL "Use system libffi" FORCE)
+    # Disable mimalloc (optional allocator, not needed for embedded use)
+    set(BUILD_WITH_MIMALLOC OFF CACHE BOOL "Disable mimalloc" FORCE)
+
+    add_subdirectory(deps/txiki EXCLUDE_FROM_ALL)
+
+    # Relax warnings for txiki.js (third-party code, don't treat warnings as errors)
+    target_compile_options(tjs PRIVATE -Wno-error -Wno-sign-compare -Wno-unused-parameter)
+    target_compile_options(qjs PRIVATE -Wno-error -Wno-sign-compare -Wno-unused-parameter)
+    # ada (URL parser) requires C++20 — ARM GCC 10.3 is too old.
+    # Replace with a stub; our JS demos don't use URL parsing.
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "11.0")
+        set_target_properties(ada PROPERTIES SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/ada_stub.cpp")
+        target_compile_options(ada PRIVATE -Wno-error)
+    else()
+        target_compile_options(ada PRIVATE -Wno-error)
+    endif()
+
+    # ---- JS Engine sources ----
+    # Render sources (ported from lv_binding_js — v8→v9 porting in progress)
+    # file(GLOB_RECURSE JS_RENDER_SRC src/js_engine/render/native/*.cpp)
+    # list(FILTER JS_RENDER_SRC EXCLUDE REGEX ".*/lodepng\\.cpp$")
+
+    list(APPEND JS_ENGINE_SRC
+        src/js_engine/js_bridge.cpp
+        src/js_engine/js_tab.c
+        # ${JS_RENDER_SRC}  -- TODO: port render components to LVGL v9
+    )
+
+    # Include paths for JS engine, render, and txiki.js headers
+    # NOTE: src/js_engine must come first so "render/native/..." and
+    # "engine.hpp" resolve relative to it (mirrors lv_binding_js layout).
+    # src/js_engine/render/ is for "native/components/..." style includes.
+    list(APPEND JS_ENGINE_INC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/render
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/render/native
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/render/native/components
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/render/native/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/deps/txiki/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/deps/txiki/deps/quickjs
+    )
+
+    # Libraries to link
+    list(APPEND JS_ENGINE_LIBS tjs)
+
+    # Default JS apps search path (LV_USE_JS_ENGINE is set globally above)
+    # Override with -DJS_APPS_DIR=/path/to/apps for device builds
+    if(NOT DEFINED JS_APPS_DIR)
+        set(JS_APPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/apps"
+            CACHE PATH "Directory containing JS app bundles")
+    endif()
+    list(APPEND JS_ENGINE_DEFS
+        JS_APPS_DIR="${JS_APPS_DIR}"
+    )
+
+endif()
+
+add_executable(lvglsim
+    src/main.c
+    src/baidu_pan/baidu_oauth.c
+    ${JS_ENGINE_SRC}
+)
+
+if (LV_USE_JS_ENGINE_ENABLED)
+    target_include_directories(lvglsim PRIVATE ${JS_ENGINE_INC})
+    target_compile_definitions(lvglsim PRIVATE ${JS_ENGINE_DEFS})
+    target_link_libraries(lvglsim ${JS_ENGINE_LIBS})
+
+    # txiki.js bundles mbedtls which may conflict with sysroot OpenSSL
+    target_link_options(lvglsim PRIVATE -Wl,--allow-multiple-definition)
+
+    # lvgl submodule targets don't inherit add_compile_definitions,
+    # so push the feature macro onto the demos target explicitly
+    target_compile_definitions(lvgl_demos PRIVATE LV_USE_JS_ENGINE=1)
+    target_compile_definitions(lvgl PRIVATE LV_USE_JS_ENGINE=1)
+endif()
 
 # Repeat lvgl_linux to resolve circular dependency with lvgl
 target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux ${PKG_CONFIG_LIB})

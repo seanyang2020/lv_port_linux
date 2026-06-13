@@ -1,3 +1,6 @@
 [submodule "lvgl"]
 	path = lvgl
 	url = https://github.com/lvgl/lvgl.git
+[submodule "deps/txiki"]
+	path = deps/txiki
+	url = https://github.com/saghul/txiki.js.git
