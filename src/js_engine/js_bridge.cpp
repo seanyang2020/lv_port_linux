@@ -545,6 +545,19 @@ int js_engine_init(void) {
 int js_engine_run_script(const char * path) {
     if (!g_rt) return -1;
     JSContext * ctx = g_rt->ctx;
+
+    /* Expose __dirname so JS apps can reference their own directory.
+     * e.g. if path = "/mnt/sdcard/js-app/weather/index.js",
+     * __dirname = "/mnt/sdcard/js-app/weather" */
+    char dirbuf[512];
+    strncpy(dirbuf, path, sizeof(dirbuf) - 1);
+    dirbuf[sizeof(dirbuf) - 1] = 0;
+    char * slash = strrchr(dirbuf, '/');
+    if (slash) *slash = 0;  /* strip filename, keep directory */
+    JSValue g = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, g, "__dirname", JS_NewString(ctx, dirbuf));
+    JS_FreeValue(ctx, g);
+
     JSValue r = TJS_EvalScript(ctx, path);
     if (JS_IsException(r)) {
         JSValue e = JS_GetException(ctx);

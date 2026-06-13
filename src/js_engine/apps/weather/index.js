@@ -1,7 +1,7 @@
-// Weather + Calendar — JS replica with images + live clock
-// Image paths: /mnt/sdcard/sphoto/skin/weather_*.png
+// Weather + Calendar — self-contained JS app
+// Images: __dirname/skin/weather_*.png (deployed alongside index.js)
 
-var SKIN = "/mnt/sdcard/sphoto/skin/";
+var SKIN = __dirname + "/skin/";
 var W = lvgljs.getScreenSize();
 var isLand = W.w > W.h;
 
@@ -34,14 +34,13 @@ function iconPath(name, small) {
 lvgljs.screenColor(0xD2E0EB);
 
 // Close button
-var closeBtn = lvgljs.btn("X", W.w - 60, 8, 50, 50, function() { lvgljs.exit(); });
-lvgljs.setRadius(closeBtn, 25);
-lvgljs.setFont(closeBtn, 20);
+var cb = lvgljs.btn("X", W.w - 60, 8, 50, 50, function() { lvgljs.exit(); });
+lvgljs.setRadius(cb, 25); lvgljs.setFont(cb, 20);
 
 // ============================================================
 // Weather panel
 // ============================================================
-var panW = isLand ? 598 : 740, panH = isLand ? 700 : 550;
+var panW = isLand ? 598 : W.w - 60, panH = isLand ? 700 : 550;
 var pan = lvgljs.panel(20, 60, panW, panH);
 lvgljs.setBgColor(pan, 0xFFFFFF); lvgljs.setOpacity(pan, 200); lvgljs.setRadius(pan, 28);
 
@@ -57,7 +56,7 @@ lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, 22); lvgljs.se
 var timeLbl = lvgljs.label("", 30, 86);
 lvgljs.setTextColor(timeLbl, 0x000000); lvgljs.setFont(timeLbl, 36);
 
-// Weather icon (image)
+// Weather icon (image from local skin)
 var iconImg = lvgljs.image(iconPath(wx.icon), isLand ? 219 : 290, isLand ? 235 : 140, 160, 160);
 
 // City
@@ -77,14 +76,11 @@ var fcX = 30, fcY = isLand ? 550 : 400, fcW = isLand ? 120 : 150, fcGap = isLand
 var fcIcons = [], fcLabels = [];
 for (var i = 0; i < 4; i++) {
     var x = fcX + i * (fcW + fcGap);
-    // date label
     var dl = lvgljs.label(fc[i].d, x + 30, fcY + 12);
     lvgljs.setTextColor(dl, 0x172335); lvgljs.setFont(dl, 22);
     fcLabels.push(dl);
-    // small weather icon
     var im = lvgljs.image(iconPath(fc[i].i, true), x + 35, fcY + 58, 50, 50);
     fcIcons.push(im);
-    // temp range
     var tl = lvgljs.label(fc[i].hi + "/" + fc[i].lo, x + 30, fcY + 115);
     lvgljs.setTextColor(tl, 0x666666); lvgljs.setFont(tl, 14);
 }
@@ -105,45 +101,33 @@ lvgljs.setTextColor(weekHdr, 0x999999); lvgljs.setFont(weekHdr, 14);
 var dayLabels = [];
 var cw = isLand ? 73 : 100, rh = isLand ? 60 : 65;
 var gx = isLand ? 26 : 30, gy = isLand ? 117 : 120;
-
-for (var row = 0; row < 6; row++) {
-    for (var col = 0; col < 7; col++) {
-        var lbl = lvgljs.label("", gx + col * cw, gy + row * rh);
-        lvgljs.setFont(lbl, 14);
-        dayLabels.push(lbl);
-    }
-}
+for (var row = 0; row < 6; row++)
+    for (var col = 0; col < 7; col++)
+        dayLabels.push(lvgljs.label("", gx + col * cw, gy + row * rh));
 
 var hlLabel = lvgljs.label("", isLand ? 50 : 40, isLand ? 480 : 510);
 lvgljs.setTextColor(hlLabel, 0x666666); lvgljs.setFont(hlLabel, 14);
 
 // ============================================================
-// Update functions
+// Update
 // ============================================================
 function updateAll() {
     var now = new Date();
     var y = now.getFullYear(), m = now.getMonth()+1, d = now.getDate();
     var wd = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][now.getDay()];
-
-    // Date
     lvgljs.setText(dateLbl, y + "-" + (m<10?"0":"")+m + "-" + (d<10?"0":"")+d + " " + wd);
-    // Time
     var h = now.getHours(), mi = now.getMinutes(), s = now.getSeconds();
     lvgljs.setText(timeLbl, (h<10?"0":"")+h+":"+(mi<10?"0":"")+mi+":"+(s<10?"0":"")+s);
-    // Lunar
     var ld = lunarDay(y,m,d);
     lvgljs.setText(lunarLbl, "Lunar " + m + "/" + d + " " + lunarDays[ld-1]);
 
-    // Calendar
     lvgljs.setText(calTitle, y + "-" + (m<10?"0":"")+m);
     var startWd = new Date(y, m-1, 1).getDay();
     var dim = new Date(y, m, 0).getDate();
-
     for (var i = 0; i < 42; i++) {
         var dn = i - startWd + 1;
         if (dn >= 1 && dn <= dim) {
-            var ldn = lunarDay(y, m, dn);
-            lvgljs.setText(dayLabels[i], dn + "\n" + lunarDays[ldn-1]);
+            lvgljs.setText(dayLabels[i], dn + "\n" + lunarDays[lunarDay(y,m,dn)-1]);
             if (dn === d) {
                 lvgljs.setBgColor(dayLabels[i], 0x0088FF); lvgljs.setOpacity(dayLabels[i], 25);
                 lvgljs.setTextColor(dayLabels[i], 0x0088FF); lvgljs.setRadius(dayLabels[i], 8);
@@ -156,7 +140,6 @@ function updateAll() {
             lvgljs.setBgColor(dayLabels[i], 0x000000); lvgljs.setOpacity(dayLabels[i], 0);
         }
     }
-    // Huangli
     var idx = (y+m+d) % 8;
     lvgljs.setText(hlLabel, "Yi: " + yiJi[idx][0] + ", " + yiJi[(idx+1)%8][0] +
         "    Ji: " + yiJi[(idx+2)%8][0] + ", " + yiJi[(idx+3)%8][0]);
@@ -165,7 +148,7 @@ function updateAll() {
 // ============================================================
 // Refresh button
 // ============================================================
-var refBtn = lvgljs.btn("Refresh", isLand ? 260 : 320, isLand ? 440 : 575, 100, 40, function() {
+lvgljs.btn("Refresh", isLand ? 260 : 320, isLand ? 440 : 575, 100, 40, function() {
     wx.temp = [20,21,22,23,24,25,26][Math.floor(Math.random()*7)];
     lvgljs.setText(tempLbl, wx.temp + " C");
     var f0 = fc.shift(); fc.push(f0);
@@ -175,6 +158,5 @@ var refBtn = lvgljs.btn("Refresh", isLand ? 260 : 320, isLand ? 440 : 575, 100, 
     }
 });
 
-// Start clock
 updateAll();
 lvgljs.setInterval(1000, updateAll);
