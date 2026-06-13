@@ -599,17 +599,34 @@ void js_engine_tick(void) {
 void js_engine_cleanup(void) {
     if (!g_rt) return;
     g_running = false;
+
+    /* 1. Delete all LVGL timers created by lvgljs.setInterval().
+     *    Must happen BEFORE freeing callbacks+JS runtime — the timer
+     *    callbacks reference JS functions and would crash if called
+     *    after TJS_FreeRuntime. */
+    for (int i = 0; i < g_timer_count; i++) {
+        if (g_timers[i]) { lv_timer_del(g_timers[i]); g_timers[i] = NULL; }
+    }
+    g_timer_count = 0;
+
+    /* 2. Stop and close the libuv render timer */
     uv_timer_stop(&g_render_timer);
     uv_close((uv_handle_t *)&g_render_timer, NULL);
     uv_run(&g_rt->loop, UV_RUN_NOWAIT);
+
+    /* 3. Release JS callbacks (before freeing runtime) */
     for (int i = 0; i < g_cb_count; i++) JS_FreeValue(g_js_ctx, g_callbacks[i]);
+
+    /* 4. Free QuickJS runtime */
     TJS_FreeRuntime(g_rt);
     g_rt = NULL; g_js_ctx = NULL; g_inited = false;
+
+    /* 5. Reset all state */
     g_widget_count = 0; g_cb_count = 0;
-    for (int i = 0; i < g_timer_count; i++) g_timers[i] = NULL;
-    g_timer_count = 0;
     memset(g_widgets, 0, sizeof(g_widgets));
     memset(g_callbacks, 0, sizeof(g_callbacks));
+    memset(g_timers, 0, sizeof(g_timers));
+
     LV_LOG_USER("[js_engine] cleaned up");
 }
 
