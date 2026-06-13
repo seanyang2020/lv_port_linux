@@ -78,10 +78,12 @@ static lv_obj_t * get_widget(int id) {
     if (id < 0 || id >= g_widget_count) return NULL;
     return g_widgets[id];
 }
-/* If last arg is an int (not a function), consume it as parent widget ID */
-static lv_obj_t * extract_parent(JSContext * C, int * pN, JSValue * A) {
+/* Only extract parent if argc exceeds base_argc for this widget type.
+ * This avoids confusing coordinate values with parent IDs.
+ * e.g. label(text,x,y) has base=3; label(text,x,y,parent) has 4 args. */
+static lv_obj_t * extract_parent(JSContext * C, int * pN, JSValue * A, int base_argc) {
     int N = *pN;
-    if (N > 0 && JS_IsNumber(A[N-1])) {
+    if (N > base_argc && JS_IsNumber(A[N-1])) {
         int pid; JS_ToInt32(C, &pid, A[N-1]);
         lv_obj_t * p = get_widget(pid);
         if (p) { (*pN)--; return p; }
@@ -110,9 +112,17 @@ static void change_event_cb(lv_event_t * e) {
 }
 
 /* ---- font lookup ---- */
+/* Name registry for non-montserrat fonts */
+static lv_font_t * font_by_name(const char * name) {
+    if (!name) return NULL;
+    if (strcmp(name, "cjk") == 0) {
+        LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk);
+        return (lv_font_t*)&lv_font_source_han_sans_sc_16_cjk;
+    }
+    return NULL;
+}
 static lv_font_t * font_by_size(int sz) {
     switch(sz) {
-        case 10: return (lv_font_t*)&lv_font_montserrat_12; /* nearest */
         case 12: return (lv_font_t*)&lv_font_montserrat_12;
         case 14: return (lv_font_t*)&lv_font_montserrat_14;
         case 16: return (lv_font_t*)&lv_font_montserrat_16;
@@ -126,6 +136,24 @@ static lv_font_t * font_by_size(int sz) {
         case 48: return (lv_font_t*)&lv_font_montserrat_48;
         default: return (lv_font_t*)&lv_font_montserrat_16;
     }
+}
+/* setFont now accepts: integer size OR string name like "cjk" */
+static JSValue js_set_font(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id; JS_ToInt32(C, &id, A[0]);
+    lv_obj_t * o = get_widget(id);
+    if (!o) return JS_UNDEFINED;
+
+    lv_font_t * f = NULL;
+    if (N > 1 && JS_IsString(A[1])) {
+        const char * name = JS_ToCString(C, A[1]);
+        f = font_by_name(name);
+        if (name) JS_FreeCString(C, name);
+    } else if (N > 1) {
+        int sz = 16; JS_ToInt32(C, &sz, A[1]);
+        f = font_by_size(sz);
+    }
+    if (f) lv_obj_set_style_text_font(o, f, 0);
+    return JS_UNDEFINED;
 }
 
 /**********************
@@ -159,7 +187,7 @@ static JSValue js_get_screen_size(JSContext * C, JSValue T, int N, JSValue * A) 
 
 /* ---- label ---- */
 static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 3);
     const char * t = ""; int x = 0, y = 0;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
@@ -174,7 +202,7 @@ static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- textbox (textarea) ---- */
 static JSValue js_textbox(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 4);
     int x = 0, y = 0, w = 200, h = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
@@ -191,7 +219,7 @@ static JSValue js_textbox(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- btn ---- */
 static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 5);  /* text,x,y,w,h=5 */
     const char * t = "Btn"; int x = 0, y = 0, w = 100, h = 40;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
@@ -213,7 +241,7 @@ static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- image ---- */
 static JSValue js_image(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 5);  /* path,x,y,w,h=5 */
     const char * path = ""; int x = 0, y = 0, w = 100, h = 100;
     if (N > 0) path = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
@@ -229,7 +257,7 @@ static JSValue js_image(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- panel (container) ---- */
 static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 4);
     int x = 0, y = 0, w = 100, h = 100;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
@@ -248,7 +276,7 @@ static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- switch ---- */
 static JSValue js_switch(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 2);  /* x,y=2 */
     int x = 0, y = 0;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
@@ -264,7 +292,7 @@ static JSValue js_switch(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- slider ---- */
 static JSValue js_slider(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 6);  /* x,y,w,min,max,val=6 */
     int x = 0, y = 0, w = 200, min = 0, max = 100, val = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
@@ -286,7 +314,7 @@ static JSValue js_slider(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- checkbox ---- */
 static JSValue js_checkbox(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 3);  /* text,x,y=3 */
     const char * t = ""; int x = 0, y = 0;
     if (N > 0) t = JS_ToCString(C, A[0]);
     if (N > 1) JS_ToInt32(C, &x, A[1]);
@@ -300,7 +328,7 @@ static JSValue js_checkbox(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- arc ---- */
 static JSValue js_arc(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; lv_obj_t * p = extract_parent(C, &N, A);
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 6);  /* x,y,size,min,max,val=6 */
     int x = 0, y = 0, size = 100, min = 0, max = 100, val = 50;
     if (N > 0) JS_ToInt32(C, &x, A[0]);
     if (N > 1) JS_ToInt32(C, &y, A[1]);
@@ -356,13 +384,8 @@ STYLE_HEX(text_color, lv_obj_set_style_text_color, 0x000000)
 STYLE_HEX(bg_color,   lv_obj_set_style_bg_color,   0xFFFFFF)
 STYLE_SETTER(width,   lv_obj_set_width)
 STYLE_SETTER(height,  lv_obj_set_height)
+/* setFont is above (near font_by_name) — handles int sizes + string names */
 
-static JSValue js_set_font(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; int id, sz = 16; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &sz, A[1]);
-    lv_obj_t * o = get_widget(id);
-    if (o && font_by_size(sz)) lv_obj_set_style_text_font(o, font_by_size(sz), 0);
-    return JS_UNDEFINED;
-}
 static JSValue js_set_radius(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; int id, r = 0; JS_ToInt32(C, &id, A[0]); if (N > 1) JS_ToInt32(C, &r, A[1]);
     lv_obj_t * o = get_widget(id); if (o) lv_obj_set_style_radius(o, r, 0);

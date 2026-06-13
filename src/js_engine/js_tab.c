@@ -255,19 +255,22 @@ static void return_to_list(void)
         lv_timer_delete(g_ctx.tick_timer);
         g_ctx.tick_timer = NULL;
     }
-    js_engine_cleanup();
 
-    /* CRITICAL: restore previous screen BEFORE deleting js_screen.
-     * Deleting the active screen causes a segfault in LVGL. */
+    /* 1. Restore previous screen first (cannot delete active screen) */
     if (g_ctx.prev_screen) {
         lv_screen_load(g_ctx.prev_screen);
     }
 
-    /* Now safe to delete — js_screen is no longer active */
+    /* 2. Delete JS screen + all its widget children.
+     *    Must happen BEFORE js_engine_cleanup() because widget event
+     *    callbacks reference JS functions — they need a live runtime. */
     if (g_ctx.js_screen) {
         lv_obj_delete(g_ctx.js_screen);
         g_ctx.js_screen = NULL;
     }
+
+    /* 3. Now safe to free JS runtime (no more widget callbacks pending) */
+    js_engine_cleanup();
 
     g_ctx.back_btn = NULL;
     g_ctx.prev_screen = NULL;
