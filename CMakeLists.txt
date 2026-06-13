@@ -471,11 +471,11 @@ if (LV_USE_JS_ENGINE_ENABLED)
     # Relax warnings for txiki.js (third-party code, don't treat warnings as errors)
     target_compile_options(tjs PRIVATE -Wno-error -Wno-sign-compare -Wno-unused-parameter)
     target_compile_options(qjs PRIVATE -Wno-error -Wno-sign-compare -Wno-unused-parameter)
-    # ada (URL parser) requires C++20 — ARM GCC 10.3 is too old.
-    # Replace with a stub; our JS demos don't use URL parsing.
+    # Replace bundled ada (requires C++20) with our minimal URL parser
+    # on toolchains that lack constexpr std::string support.
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "11.0")
         set_target_properties(ada PROPERTIES SOURCES
-            "${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/ada_stub.cpp")
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/js_engine/ada_url.cpp")
         target_compile_options(ada PRIVATE -Wno-error)
     else()
         target_compile_options(ada PRIVATE -Wno-error)
