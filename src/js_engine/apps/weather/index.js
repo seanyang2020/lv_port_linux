@@ -148,4 +148,5 @@ lvgljs.toFront(closeBtn);
 
 updateAll();
 lvgljs.setInterval(1000, updateAll);
+lvgljs.hideBackButton();   /* own close button is reliable now */
 lvgljs.print("Weather ready ["+L+"]");
