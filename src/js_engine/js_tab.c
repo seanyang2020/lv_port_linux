@@ -198,7 +198,8 @@ static void launch_app(int idx)
                               lv_color_hex(0x202020), 0);
     lv_obj_set_style_bg_opa(g_ctx.js_screen, LV_OPA_COVER, 0);
 
-    /* Floating back button (top-right, small, semi-transparent) */
+    /* Floating back button — hidden by default (JS app provides its own).
+     * JS can show it via lvgljs.showBackButton(true) if desired. */
     g_ctx.back_btn = lv_btn_create(g_ctx.js_screen);
     lv_obj_set_size(g_ctx.back_btn, 32, 32);
     lv_obj_align(g_ctx.back_btn, LV_ALIGN_TOP_RIGHT, -8, 8);
@@ -207,6 +208,7 @@ static void launch_app(int idx)
     lv_obj_set_style_radius(g_ctx.back_btn, 16, 0);
     lv_obj_add_event_cb(g_ctx.back_btn, back_btn_event_cb,
                         LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(g_ctx.back_btn, LV_OBJ_FLAG_HIDDEN); /* hidden by default */
 
     lv_obj_t * back_label = lv_label_create(g_ctx.back_btn);
     lv_label_set_text_static(back_label, LV_SYMBOL_CLOSE);
@@ -286,6 +288,12 @@ void lv_js_tab_return(void)
     JS_LOG("lv_js_tab_return() called  js_screen=%p", (void*)g_ctx.js_screen);
     if (!g_ctx.js_screen) return;
     lv_async_call(do_return_to_list, NULL);
+}
+
+/* Expose the floating back button for JS showBackButton() control */
+lv_obj_t * js_get_back_btn(void)
+{
+    return g_ctx.back_btn;
 }
 
 /**********************
