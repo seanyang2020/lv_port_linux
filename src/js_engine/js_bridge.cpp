@@ -479,34 +479,38 @@ static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
 }
 
 /* ---- timer ---- */
-/* We maintain a parallel array of lv_timer_t* for clearInterval */
-static lv_timer_t * g_timers[64];
-static int        g_timer_count = 0;
+/* Each timer stores its LVGL timer pointer + the callback ID it should fire */
+static struct { lv_timer_t * timer; int cbid; } g_timers[64];
+static int g_timer_count = 0;
 
 static void js_timer_cb(lv_timer_t * t) {
     for (int i = 0; i < g_timer_count; i++) {
-        if (g_timers[i] == t) {
-            JS_LOG("js_timer_cb(timer_id=%d) firing", i);
-            fire_callback(i); return;
+        if (g_timers[i].timer == t) {
+            JS_LOG("js_timer_cb(timer_id=%d) → cbid=%d", i, g_timers[i].cbid);
+            fire_callback(g_timers[i].cbid);
+            return;
         }
     }
     JS_LOG("js_timer_cb: unknown timer %p", (void*)t);
 }
 static JSValue js_set_interval(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)T; if (N < 2 || !JS_IsFunction(C, A[1]) || g_timer_count >= 64) return JS_NewInt32(C, -1);
+    (void)T; if (N < 2 || !JS_IsFunction(C, A[1]) || g_timer_count >= 64)
+        return JS_NewInt32(C, -1);
     int ms = 1000; JS_ToInt32(C, &ms, A[0]);
-    int cid = store_callback(C, A[1]);
+    int cbid = store_callback(C, A[1]);
     int tid = g_timer_count;
-    g_timers[tid] = lv_timer_create(js_timer_cb, (uint32_t)ms, NULL);
+    g_timers[tid].timer = lv_timer_create(js_timer_cb, (uint32_t)ms, NULL);
+    g_timers[tid].cbid  = cbid;
     g_timer_count++;
-    JS_LOG("setInterval(ms=%d) → tid=%d cbid=%d", ms, tid, cid);
+    JS_LOG("setInterval(ms=%d) → tid=%d cbid=%d", ms, tid, cbid);
     return JS_NewInt32(C, tid);
 }
 static JSValue js_clear_interval(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; int tid; JS_ToInt32(C, &tid, A[0]);
-    if (tid >= 0 && tid < g_timer_count && g_timers[tid]) {
-        lv_timer_del(g_timers[tid]);
-        g_timers[tid] = NULL;
+    if (tid >= 0 && tid < g_timer_count && g_timers[tid].timer) {
+        lv_timer_del(g_timers[tid].timer);
+        g_timers[tid].timer = NULL;
+        g_timers[tid].cbid  = -1;
     }
     return JS_UNDEFINED;
 }
@@ -637,7 +641,7 @@ void js_engine_cleanup(void) {
      *    callbacks reference JS functions and would crash if called
      *    after TJS_FreeRuntime. */
     for (int i = 0; i < g_timer_count; i++) {
-        if (g_timers[i]) { lv_timer_del(g_timers[i]); g_timers[i] = NULL; }
+        if (g_timers[i].timer) { lv_timer_del(g_timers[i].timer); g_timers[i].timer = NULL; }
     }
     g_timer_count = 0;
 
