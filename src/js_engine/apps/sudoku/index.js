@@ -58,23 +58,30 @@ function loadIndex(){
 function saveIndex(idx){lvgljs.writeFile(IDX_FILE,JSON.stringify(idx));}
 
 // Save/Load
-function saveGame(){
-    var name=lvgljs.getText(saveNameBox).trim();
-    if(!name){lvgljs.print("Enter a save name");return;}
-    var idx=loadIndex();
-    var now=new Date();
-    var meta={name:name,difficulty:difficulty,filled:filled,date:now.toISOString().slice(0,16),cells:81-filled};
-    // Update or add
-    var found=false;
-    for(var i=0;i<idx.length;i++){if(idx[i].name===name){idx[i]=meta;found=true;break;}}
-    if(!found)idx.push(meta);
-    saveIndex(idx);
-    // Save game data
-    var data={board:board,solution:solution,fixed:fixed,difficulty:difficulty,filled:filled,date:meta.date};
-    var file=DIR+"/save_"+name+".json";
-    lvgljs.writeFile(file,JSON.stringify(data));
-    currentSave=name;
-    lvgljs.print("Saved: "+name+" ("+diffLabels[difficulty]+", "+meta.cells+" empty)");
+function showSavePopup(){
+    hidePopup();
+    var sp=lvgljs.panel(W.w/2-150,W.h/2-80,300,160);
+    lvgljs.setBgColor(sp,0x333333);lvgljs.setOpacity(sp,240);lvgljs.setRadius(sp,12);lvgljs.toFront(sp);
+    lvgljs.label("Save As",100,10,sp);
+    var tb=lvgljs.textbox(20,40,260,40,sp);
+    lvgljs.setText(tb,currentSave||"save1");lvgljs.setBgColor(tb,0x555555);lvgljs.setTextColor(tb,0xFFFFFF);
+    lvgljs.btn("OK",60,95,80,40,function(){
+        var name=lvgljs.getText(tb).trim().replace(/[^a-zA-Z0-9_]/g,"").slice(0,20);
+        if(!name){lvgljs.print("Invalid name");return;}
+        var idx=loadIndex();
+        var now=new Date();
+        var meta={name:name,difficulty:difficulty,filled:filled,date:now.toISOString().slice(0,16),cells:81-filled};
+        var found=false;
+        for(var i=0;i<idx.length;i++){if(idx[i].name===name){idx[i]=meta;found=true;break;}}
+        if(!found)idx.push(meta);
+        saveIndex(idx);
+        var data={board:board,solution:solution,fixed:fixed,difficulty:difficulty,filled:filled,date:meta.date};
+        lvgljs.writeFile(DIR+"/save_"+name+".json",JSON.stringify(data));
+        currentSave=name;updateStatus();
+        lvgljs.setVisible(sp,0);lvgljs.setVisible(tb,0);
+        lvgljs.print("Saved: "+name);
+    },sp);
+    lvgljs.btn("Cancel",160,95,80,40,function(){lvgljs.setVisible(sp,0);},sp);
 }
 
 function loadGame(name){
@@ -99,8 +106,22 @@ function loadGame(name){
     }catch(e){lvgljs.print("Load failed: "+e);return false;}
 }
 
+function showDeletePopup(){
+    var idx=loadIndex();
+    if(idx.length===0){lvgljs.print("No saves to delete");return;}
+    hidePopup();
+    var sp=lvgljs.panel(W.w/2-150,W.h/2-100,300,200);
+    lvgljs.setBgColor(sp,0x333333);lvgljs.setOpacity(sp,240);lvgljs.setRadius(sp,12);lvgljs.toFront(sp);
+    lvgljs.label("Delete Save",80,10,sp);
+    var y=42;
+    for(var i=0;i<Math.min(idx.length,5);i++){
+        var n=idx[i].name;
+        lvgljs.btn(n,20,y,200,26,function(name){return function(){deleteSave(name);lvgljs.setVisible(sp,0);updateStatus();};}(n),sp);
+        y+=30;
+    }
+    lvgljs.btn("Cancel",80,y+8,100,34,function(){lvgljs.setVisible(sp,0);},sp);
+}
 function deleteSave(name){
-    if(!name){lvgljs.print("Enter save name to delete");return;}
     var idx=loadIndex(),newIdx=[];
     for(var i=0;i<idx.length;i++)if(idx[i].name!==name)newIdx.push(idx[i]);
     saveIndex(newIdx);
