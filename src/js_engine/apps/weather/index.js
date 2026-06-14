@@ -58,7 +58,7 @@ function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".p
 // Screen
 lvgljs.screenColor(0xD2E0EB);
 var closeImg = lvgljs.image(SKIN+"weather_close.png", W.w-68, 8, 60, 60);
-lvgljs.onClick(closeImg, function(){ lvgljs.exit(); });
+lvgljs.onClick(closeImg, function(){ lvgljs.print("close clicked!"); lvgljs.exit(); });
 
 var m=20, gap=24, panW=isLand?598:W.w-m*2, wxH=isLand?700:550;
 var calY=isLand?m+gap:m+wxH+gap, calH=isLand?700:W.h-calY-m;
@@ -141,5 +141,6 @@ function updateAll() {
 }
 updateAll();
 lvgljs.setInterval(1000, updateAll);
-lvgljs.hideBackButton();   /* we have our own close button */
+/* Keep system back button visible — reliable fallback.
+ * The weather_close.png is decorative if skin images are present. */
 lvgljs.print("Weather ready ["+L+"]");
