@@ -1,25 +1,56 @@
-// Weather + Calendar — Chinese text with CJK font
+// Weather + Calendar — bilingual (zh/en) via LANG env var
+//   export LANG=zh_CN.UTF-8  → Chinese
+//   export LANG=en_US.UTF-8  → English
+//   default                   → English
 
+var L = lvgljs.getEnv("LANG", "en").indexOf("zh") >= 0 ? "zh" : "en";
+var CJK = "cjk", M14=14, M16=16, M22=22, M30=30, M36=36, M48=48;
 var SKIN = __dirname + "/skin/";
 var W = lvgljs.getScreenSize();
 var isLand = W.w > W.h;
-var CJK = "cjk";  // font name for lvgljs.setFont
-var M14 = 14, M16 = 16, M22 = 22, M30 = 30, M36 = 36, M48 = 48;
 
-var wx = { city: "上海", temp: 22, cond: "晴天", icon: "sunny" };
+// ---- i18n data ----
+var T = {
+    en: {
+        city: "Shanghai", cond: "Sunny", icon: "sunny",
+        week: ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],
+        fcDays: ["Today","Tom.","Day+2","Day+3"],
+        yi: [["Wedding","Planting"],["Travel","Opening"],["Trade","MoveIn"],["BedSetup","Move"],
+             ["Bridge","Burial"],["Ground","Earth"],["Canal","Water"],["Build","Logging"]],
+        lunarDays: ["Chu1","Chu2","Chu3","Chu4","Chu5","Chu6","Chu7","Chu8","Chu9","Chu10",
+            "11","12","13","14","15","16","17","18","19","20",
+            "21","22","23","24","25","26","27","28","29","30"],
+        fmtDate: function(y,m,d,wd){return y+"-"+(m<10?"0":"")+m+"-"+(d<10?"0":"")+d+" "+T.en.week[wd];},
+        fmtLunar: function(m,d,ld){return "Lunar "+m+"/"+d+" "+T.en.lunarDays[ld-1];},
+        fmtCal: function(y,m){return y+"-"+(m<10?"0":"")+m;},
+        fmtHuangli: function(yi,ji){return "Yi: "+yi[0]+" "+yi[1]+"  Ji: "+ji[0]+" "+ji[1];},
+        weekHdr: "Su Mo Tu We Th Fr Sa"
+    },
+    zh: {
+        city: "上海", cond: "晴天", icon: "sunny",
+        week: ["周日","周一","周二","周三","周四","周五","周六"],
+        fcDays: ["今天","明天","后天","周五"],
+        yi: [["嫁娶","栽种"],["出行","开市"],["交易","入宅"],["安床","移徙"],
+             ["造桥","安葬"],["动土","破土"],["开渠","放水"],["修造","伐木"]],
+        lunarDays: ["初一","初二","初三","初四","初五","初六","初七","初八","初九","初十",
+            "十一","十二","十三","十四","十五","十六","十七","十八","十九","二十",
+            "廿一","廿二","廿三","廿四","廿五","廿六","廿七","廿八","廿九","三十"],
+        fmtDate: function(y,m,d,wd){return y+"年"+(m<10?"0":"")+m+"月"+(d<10?"0":"")+d+"日 "+T.zh.week[wd];},
+        fmtLunar: function(m,d,ld){return "农历"+T.zh.lunarDays[ld-1];},
+        fmtCal: function(y,m){return y+"年"+(m<10?"0":"")+m+"月";},
+        fmtHuangli: function(yi,ji){return "宜: "+yi[0]+" "+yi[1]+"  忌: "+ji[0]+" "+ji[1];},
+        weekHdr: "日 一 二 三 四 五 六"
+    }
+};
+var D = T[L];
+var font = (L==="zh") ? CJK : M16;
+
+var wx = { city: D.city, temp: 22, cond: D.cond, icon: D.icon };
 var fc = [
-    { d: "今天", i: "sunny",    hi: 22, lo: 15 },
-    { d: "明天", i: "cloudy",   hi: 20, lo: 14 },
-    { d: "后天", i: "sunny",    hi: 23, lo: 16 },
-    { d: "周五", i: "overcast", hi: 19, lo: 13 }
-];
-var lunarDays = ["初一","初二","初三","初四","初五","初六","初七","初八","初九","初十",
-    "十一","十二","十三","十四","十五","十六","十七","十八","十九","二十",
-    "廿一","廿二","廿三","廿四","廿五","廿六","廿七","廿八","廿九","三十"];
-var weekDays = ["周日","周一","周二","周三","周四","周五","周六"];
-var yiJi = [
-    ["嫁娶","栽种"],["出行","开市"],["交易","入宅"],["安床","移徙"],
-    ["造桥","安葬"],["动土","破土"],["开渠","放水"],["修造","伐木"]
+    { d: D.fcDays[0], i: "sunny",    hi: 22, lo: 15 },
+    { d: D.fcDays[1], i: "cloudy",   hi: 20, lo: 14 },
+    { d: D.fcDays[2], i: "sunny",    hi: 23, lo: 16 },
+    { d: D.fcDays[3], i: "overcast", hi: 19, lo: 13 }
 ];
 function lunarDay(y,m,d) { return ((y+m*13+d*7)%30)+1; }
 function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".png"; }
@@ -29,43 +60,28 @@ lvgljs.screenColor(0xD2E0EB);
 var closeImg = lvgljs.image(SKIN+"weather_close.png", W.w-68, 8, 60, 60);
 lvgljs.onClick(closeImg, function(){ lvgljs.exit(); });
 
-// Panel dimensions
-var m = 20, gap = 24;
-var panW = isLand ? 598 : W.w - m*2;
-var wxH  = isLand ? 700 : 550;
-var calY = isLand ? m+gap : m+wxH+gap;
-var calH = isLand ? 700 : W.h - calY - m;
+var m=20, gap=24, panW=isLand?598:W.w-m*2, wxH=isLand?700:550;
+var calY=isLand?m+gap:m+wxH+gap, calH=isLand?700:W.h-calY-m;
 
-// ==== Weather Panel ====
+// Weather panel
 var wxPan = lvgljs.panel(m, m, panW, wxH);
 lvgljs.setBgColor(wxPan, 0xFFFFFF); lvgljs.setOpacity(wxPan, 200); lvgljs.setRadius(wxPan, 28);
-
 var dateLbl  = lvgljs.label("", 30, 30, wxPan);
 lvgljs.setTextColor(dateLbl, 0x172335); lvgljs.setFont(dateLbl, M22); lvgljs.setOpacity(dateLbl, 150);
-
 var lunarLbl = lvgljs.label("", 220, 30, wxPan);
-lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, CJK); lvgljs.setOpacity(lunarLbl, 150);
-
+lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, font); lvgljs.setOpacity(lunarLbl, 150);
 var timeLbl  = lvgljs.label("", 30, 86, wxPan);
 lvgljs.setTextColor(timeLbl, 0x000000); lvgljs.setFont(timeLbl, M36);
-
 lvgljs.image(icon(wx.icon), isLand?219:290, isLand?235:140, 160, 160, wxPan);
-
-var cityLbl  = lvgljs.label(wx.city, isLand?420:540, 40, wxPan);
-lvgljs.setTextColor(cityLbl, 0x172335); lvgljs.setFont(cityLbl, CJK);
-
-// Location icon
 lvgljs.image(SKIN+"weather_location.png", isLand?538:686, isLand?43:24, 30, 30, wxPan);
-
+var cityLbl  = lvgljs.label(D.city, isLand?420:540, 40, wxPan);
+lvgljs.setTextColor(cityLbl, 0x172335); lvgljs.setFont(cityLbl, font);
 var tempLbl  = lvgljs.label(wx.temp+"°C", isLand?372:500, isLand?87:80, wxPan);
 lvgljs.setTextColor(tempLbl, 0x172335); lvgljs.setFont(tempLbl, M48);
+var condLbl  = lvgljs.label(D.cond, isLand?235:310, isLand?410:300, wxPan);
+lvgljs.setTextColor(condLbl, 0x172335); lvgljs.setFont(condLbl, font);
 
-var condLbl  = lvgljs.label(wx.cond, isLand?235:310, isLand?410:300, wxPan);
-lvgljs.setTextColor(condLbl, 0x172335); lvgljs.setFont(condLbl, CJK);
-
-// Forecast
-var fcIcons=[], fcLabels=[];
-var fcX=30, fcY=isLand?550:400, fcW=isLand?120:150, fcGap=isLand?20:30;
+var fcIcons=[], fcLabels=[], fcX=30, fcY=isLand?550:400, fcW=isLand?120:150, fcGap=isLand?20:30;
 for (var i=0; i<4; i++) {
     var x=fcX+i*(fcW+fcGap);
     fcLabels.push(lvgljs.label(fc[i].d, x+30, fcY+12, wxPan));
@@ -74,45 +90,39 @@ for (var i=0; i<4; i++) {
     lvgljs.setTextColor(tl, 0x666666); lvgljs.setFont(tl, M14);
 }
 for (var j=0; j<fcLabels.length; j++) {
-    lvgljs.setTextColor(fcLabels[j], 0x172335); lvgljs.setFont(fcLabels[j], CJK);
+    lvgljs.setTextColor(fcLabels[j], 0x172335); lvgljs.setFont(fcLabels[j], font);
 }
 
-// ==== Calendar Panel ====
+// Calendar panel
 var calPan = lvgljs.panel(isLand?652:m, calY, panW, calH);
 lvgljs.setBgColor(calPan, 0xFFFFFF); lvgljs.setOpacity(calPan, 200); lvgljs.setRadius(calPan, 28);
-
 var calTitle = lvgljs.label("", isLand?199:panW/2-60, 40, calPan);
-lvgljs.setTextColor(calTitle, 0x172335); lvgljs.setFont(calTitle, CJK);
-
-var weekHdr  = lvgljs.label("日 一 二 三 四 五 六", isLand?40:25, 90, calPan);
-lvgljs.setTextColor(weekHdr, 0x999999); lvgljs.setFont(weekHdr, CJK);
-
-var dayLabels = [];
-var cw=isLand?73:Math.floor((panW-50)/7), rh=isLand?60:Math.floor((calH-160)/6);
+lvgljs.setTextColor(calTitle, 0x172335); lvgljs.setFont(calTitle, font);
+var weekHdr  = lvgljs.label(D.weekHdr, isLand?40:25, 90, calPan);
+lvgljs.setTextColor(weekHdr, 0x999999); lvgljs.setFont(weekHdr, font);
+var dayLabels=[], cw=isLand?73:Math.floor((panW-50)/7), rh=isLand?60:Math.floor((calH-160)/6);
 var gx=isLand?26:25, gy=isLand?117:120;
 for (var row=0; row<6; row++)
     for (var col=0; col<7; col++)
         dayLabels.push(lvgljs.label("", gx+col*cw, gy+row*rh, calPan));
-
 var hlLabel = lvgljs.label("", isLand?50:25, gy+6*rh+15, calPan);
-lvgljs.setTextColor(hlLabel, 0x666666); lvgljs.setFont(hlLabel, CJK);
+lvgljs.setTextColor(hlLabel, 0x666666); lvgljs.setFont(hlLabel, font);
 
-// ==== Update ====
 function updateAll() {
-    var now = new Date();
+    var now=new Date();
     var y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
-    lvgljs.setText(dateLbl, y+"年"+(m<10?"0":"")+m+"月"+(d<10?"0":"")+d+"日 "+weekDays[now.getDay()]);
+    lvgljs.setText(dateLbl, D.fmtDate(y,m,d,now.getDay()));
     var h=now.getHours(), mi=now.getMinutes(), s=now.getSeconds();
     lvgljs.setText(timeLbl, (h<10?"0":"")+h+":"+(mi<10?"0":"")+mi+":"+(s<10?"0":"")+s);
-    lvgljs.setText(lunarLbl, "农历"+lunarDays[lunarDay(y,m,d)-1]);
+    lvgljs.setText(lunarLbl, D.fmtLunar(m,d,lunarDay(y,m,d)));
 
-    lvgljs.setText(calTitle, y+"年"+(m<10?"0":"")+m+"月");
+    lvgljs.setText(calTitle, D.fmtCal(y,m));
     var swd=new Date(y,m-1,1).getDay(), dim=new Date(y,m,0).getDate();
     for (var i=0; i<42; i++) {
         var dn=i-swd+1;
         if (dn>=1 && dn<=dim) {
-            lvgljs.setText(dayLabels[i], dn+"\n"+lunarDays[lunarDay(y,m,dn)-1]);
-            lvgljs.setFont(dayLabels[i], CJK);
+            lvgljs.setText(dayLabels[i], dn+"\n"+D.lunarDays[lunarDay(y,m,dn)-1]);
+            lvgljs.setFont(dayLabels[i], font);
             if (dn===d) {
                 lvgljs.setBgColor(dayLabels[i], 0x0088FF); lvgljs.setOpacity(dayLabels[i], 25);
                 lvgljs.setTextColor(dayLabels[i], 0x0088FF); lvgljs.setRadius(dayLabels[i], 8);
@@ -126,10 +136,9 @@ function updateAll() {
         }
     }
     var idx=(y+m+d)%8;
-    lvgljs.setText(hlLabel, "宜: "+yiJi[idx][0]+" "+yiJi[(idx+1)%8][0]+
-        "  忌: "+yiJi[(idx+2)%8][0]+" "+yiJi[(idx+3)%8][0]);
+    var yi=D.yi[idx], ji=D.yi[(idx+2)%8];
+    lvgljs.setText(hlLabel, D.fmtHuangli(yi,ji));
 }
-
 updateAll();
 lvgljs.setInterval(1000, updateAll);
-lvgljs.print("Weather ready");
+lvgljs.print("Weather ready ["+L+"]");

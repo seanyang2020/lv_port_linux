@@ -471,6 +471,18 @@ static JSValue js_on_change(JSContext * C, JSValue T, int N, JSValue * A) {
     return JS_UNDEFINED;
 }
 
+/* ---- getEnv ---- */
+static JSValue js_get_env(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * key = ""; const char * def = "";
+    if (N > 0) key = JS_ToCString(C, A[0]);
+    if (N > 1) def = JS_ToCString(C, A[1]);
+    const char * val = getenv(key);
+    JSValue r = JS_NewString(C, val ? val : (def ? def : ""));
+    if (N > 0) JS_FreeCString(C, key);
+    if (N > 1) JS_FreeCString(C, def);
+    return r;
+}
+
 /* ---- exit ---- */
 static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)C; (void)T; (void)N; (void)A;
@@ -566,6 +578,7 @@ static void register_full_api(JSContext * ctx) {
     L(js_on_change,     "onChange",       2);
 
     /* control */
+    L(js_get_env,       "getEnv",         2);
     L(js_exit,          "exit",           0);
     L(js_set_interval,  "setInterval",    2);
     L(js_clear_interval,"clearInterval",  1);
