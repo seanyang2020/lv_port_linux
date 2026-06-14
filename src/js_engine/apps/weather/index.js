@@ -149,4 +149,35 @@ lvgljs.toFront(closeBtn);
 updateAll();
 lvgljs.setInterval(1000, updateAll);
 lvgljs.hideBackButton();   /* own close button is reliable now */
+// ---- Fetch real weather (updates every 30min) ----
+function fetchWeather(){
+    lvgljs.print("Fetching weather...");
+    // open-meteo: free, no key, clean JSON, Shanghai lat/lon
+    lvgljs.httpGet("https://api.open-meteo.com/v1/forecast?latitude=31.23&longitude=121.47&current_weather=true", function(json){
+        lvgljs.print("httpGet len="+(json?json.length:-1)+" start="+(json?json.substring(0,60):"null"));
+        try {
+            var data=JSON.parse(json.trim());
+            var cw=data.current_weather;
+            wx.temp=cw.temperature;
+            // WMO codes: 0=clear,1-3=partly cloudy,45-48=fog,51-67=rain,71-77=snow,80-82=showers,95-99=thunder
+            var code=cw.weathercode;
+            wx.city=D.city;
+            if(code===0)           {wx.cond="Clear";  wx.icon="sunny";}
+            else if(code<=3)        {wx.cond="Cloudy"; wx.icon="cloudy";}
+            else if(code<=48)       {wx.cond="Fog";    wx.icon="cloudy";}
+            else if(code<=67)       {wx.cond="Rain";   wx.icon="rainy";}
+            else if(code<=77)       {wx.cond="Snow";   wx.icon="rainy";}
+            else if(code<=82)       {wx.cond="Shower"; wx.icon="rainy";}
+            else                    {wx.cond="Storm";  wx.icon="rainy";}
+            lvgljs.print("Weather: "+wx.temp+"C "+wx.cond);
+            lvgljs.setText(tempLbl, wx.temp+"°C");
+            lvgljs.setText(condLbl, wx.cond);
+            lvgljs.setText(cityLbl, wx.city);
+            lvgljs.image(icon(wx.icon), isLand?219:290, isLand?235:140, 160, 160, wxPan);
+            updateAll();
+        }catch(e){ lvgljs.print("JSON parse error: "+e); }
+    });
+}
+fetchWeather();
+lvgljs.setInterval(1800000, fetchWeather); // refresh every 30min
 lvgljs.print("Weather ready ["+L+"]");

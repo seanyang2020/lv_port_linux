@@ -166,7 +166,7 @@ static lv_indev_t * init_pointer_evdev(lv_display_t * display)
         lv_indev_t * indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, input_device);
         if(indev != NULL) {
             lv_indev_set_display(indev, display);
-            set_mouse_cursor_icon(indev, display);
+            /* Touchscreens (ABS) don't need mouse cursor */
             LV_LOG_USER("evdev pointer: %s", input_device);
             return indev;
         }
@@ -192,7 +192,6 @@ static lv_indev_t * init_pointer_evdev(lv_display_t * display)
         lv_indev_t * indev = lv_evdev_create(LV_INDEV_TYPE_POINTER, fallbacks[i]);
         if(indev != NULL) {
             lv_indev_set_display(indev, display);
-            set_mouse_cursor_icon(indev, display);
             LV_LOG_USER("evdev pointer (fallback): %s", fallbacks[i]);
             return indev;
         }

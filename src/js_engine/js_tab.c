@@ -198,6 +198,7 @@ static void launch_app(int idx)
                               lv_color_hex(0x202020), 0);
     lv_obj_set_style_bg_opa(g_ctx.js_screen, LV_OPA_COVER, 0);
 
+
     /* Floating back button — safety net, visible by default.
      * JS app can hide it via lvgljs.hideBackButton() after rendering
      * its own close/exit UI.  If the JS app crashes or omits exit logic,
@@ -302,6 +303,23 @@ lv_obj_t * js_get_back_btn(void)
  *   GLOBAL FUNCTION
  **********************/
 
+static int last_app_count = -1;
+
+/**
+ * Force refresh the app list — call externally via lvgl event
+ */
+void lv_js_tab_refresh(void)
+{
+    if (!g_ctx.list_screen) return;
+    int prev = last_app_count;
+    scan_apps();
+    if (g_ctx.app_count == prev) return; /* unchanged */
+    LV_LOG_USER("[js_tab] apps changed %d→%d, rebuilding", prev, g_ctx.app_count);
+    last_app_count = g_ctx.app_count;
+    lv_obj_clean(g_ctx.list_screen);
+    create_list_ui();
+}
+
 lv_obj_t * lv_js_tab_create(lv_obj_t * parent)
 {
     memset(&g_ctx, 0, sizeof(g_ctx));
@@ -309,6 +327,7 @@ lv_obj_t * lv_js_tab_create(lv_obj_t * parent)
 
     scan_apps();
     create_list_ui();
+    last_app_count = g_ctx.app_count;
 
     return parent;
 }

@@ -25,6 +25,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <curl/curl.h>
+#include <pthread.h>
 #include <math.h>
 
 /**********************
@@ -92,9 +94,20 @@ static lv_obj_t * extract_parent(JSContext * C, int * pN, JSValue * A, int base_
     return lv_screen_active();
 }
 static void fire_callback(int cb_id) {
-    JS_LOG("fire_callback(%d)  total_cbs=%d  ctx=%p", cb_id, g_cb_count, (void*)g_js_ctx);
     if (cb_id < 0 || cb_id >= g_cb_count || !g_js_ctx) return;
     JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id], JS_UNDEFINED, 0, NULL);
+    if (JS_IsException(ret)) {
+        JSValue exc = JS_GetException(g_js_ctx);
+        const char * s = JS_ToCString(g_js_ctx, exc);
+        LV_LOG_ERROR("[js] cb error: %s", s ? s : "?");
+        if (s) JS_FreeCString(g_js_ctx, s);
+        JS_FreeValue(g_js_ctx, exc);
+    }
+    JS_FreeValue(g_js_ctx, ret);
+}
+static void fire_callback_1(int cb_id, JSValue arg) {
+    if (cb_id < 0 || cb_id >= g_cb_count || !g_js_ctx) return;
+    JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id], JS_UNDEFINED, 1, &arg);
     if (JS_IsException(ret)) {
         JSValue exc = JS_GetException(g_js_ctx);
         const char * s = JS_ToCString(g_js_ctx, exc);
@@ -197,7 +210,8 @@ static JSValue js_label(JSContext * C, JSValue T, int N, JSValue * A) {
     lv_obj_t * o = lv_label_create(p);
     lv_label_set_text(o, t ? t : "");
     lv_obj_set_pos(o, x, y);
-    lv_obj_set_style_text_color(o, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_text_color(o, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(o, &lv_font_montserrat_16, 0);
     if (t) JS_FreeCString(C, t);
     return JS_NewInt32(C, store_widget(o));
 }
@@ -230,8 +244,13 @@ static JSValue js_btn(JSContext * C, JSValue T, int N, JSValue * A) {
     if (N > 4) JS_ToInt32(C, &h, A[4]);
     lv_obj_t * o = lv_btn_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    /* Default button styling — matching lv_binding_js appearance */
+    lv_obj_set_style_radius(o, 8, 0);
+    lv_obj_set_style_shadow_width(o, 4, 0);
+    lv_obj_set_style_shadow_ofs_y(o, 2, 0);
     lv_obj_t * lb = lv_label_create(o);
     lv_label_set_text(lb, t ? t : ""); lv_obj_center(lb);
+    lv_obj_set_style_text_color(lb, lv_color_hex(0xFFFFFF), 0);
     int id = store_widget(o);
     if (N > 5 && JS_IsFunction(C, A[5])) {
         int cid = store_callback(C, A[5]);
@@ -514,12 +533,20 @@ static void global_press_cb(lv_event_t * e) { (void)e; fire_callback(g_press_cbi
 static void global_release_cb(lv_event_t * e) { (void)e; fire_callback(g_release_cbid); }
 static JSValue js_on_press(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
-    if (g_press_cbid < 0) lv_obj_add_event_cb(lv_screen_active(), global_press_cb, LV_EVENT_PRESSED, NULL);
+    if (g_press_cbid < 0) {
+        lv_obj_t * scr = lv_screen_active();
+        lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(scr, global_press_cb, LV_EVENT_PRESSED, NULL);
+    }
     g_press_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
 }
 static JSValue js_on_release(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
-    if (g_release_cbid < 0) lv_obj_add_event_cb(lv_screen_active(), global_release_cb, LV_EVENT_RELEASED, NULL);
+    if (g_release_cbid < 0) {
+        lv_obj_t * scr = lv_screen_active();
+        lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(scr, global_release_cb, LV_EVENT_RELEASED, NULL);
+    }
     g_release_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
 }
 
@@ -529,6 +556,98 @@ static JSValue js_to_front(JSContext * C, JSValue T, int N, JSValue * A) {
     lv_obj_t * o = get_widget(id);
     if (o) lv_obj_move_foreground(o);
     return JS_UNDEFINED;
+}
+
+/* ---- keyboard ---- */
+static JSValue js_keyboard(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(C, &id, A[0]);
+    lv_obj_t * ta = get_widget(id);
+    if (ta) { lv_obj_t * kb = lv_keyboard_create(lv_screen_active()); lv_keyboard_set_textarea(kb, ta); }
+    return JS_UNDEFINED;
+}
+
+/* ---- dropdown ---- */
+static JSValue js_dropdown(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; lv_obj_t * p = extract_parent(C, &N, A, 4);  /* x,y,w,h,parent */
+    int x = 0, y = 0, w = 150, h = 36;
+    if (N > 0) JS_ToInt32(C, &x, A[0]);
+    if (N > 1) JS_ToInt32(C, &y, A[1]);
+    if (N > 2) JS_ToInt32(C, &w, A[2]);
+    if (N > 3) JS_ToInt32(C, &h, A[3]);
+    lv_obj_t * o = lv_dropdown_create(p);
+    lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
+    lv_dropdown_set_options(o, "Option 1\nOption 2\nOption 3");
+    return JS_NewInt32(C, store_widget(o));
+}
+static JSValue js_dropdown_set(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2) return JS_UNDEFINED;
+    int id; JS_ToInt32(C, &id, A[0]);
+    const char * opts = JS_ToCString(C, A[1]);
+    lv_obj_t * o = get_widget(id);
+    if (o) lv_dropdown_set_options(o, opts);
+    if (opts) JS_FreeCString(C, opts);
+    return JS_UNDEFINED;
+}
+
+/* ---- Generic style setter ---- */
+static JSValue js_style(JSContext *C, JSValue T, int N, JSValue *A) {
+    (void)T; if (N<3) return JS_UNDEFINED;
+    int id; JS_ToInt32(C,&id,A[0]);
+    lv_obj_t *o = get_widget(id); if(!o) return JS_UNDEFINED;
+    const char *prop = JS_ToCString(C,A[1]);
+    int val=0; JS_ToInt32(C,&val,A[2]);
+    if     (!strcmp(prop,"bg_color"))    lv_obj_set_style_bg_color(o,lv_color_hex(val),0);
+    else if(!strcmp(prop,"text_color"))  lv_obj_set_style_text_color(o,lv_color_hex(val),0);
+    else if(!strcmp(prop,"radius"))      lv_obj_set_style_radius(o,val,0);
+    else if(!strcmp(prop,"opacity"))     lv_obj_set_style_bg_opa(o,(lv_opa_t)val,0);
+    else if(!strcmp(prop,"border_w"))    lv_obj_set_style_border_width(o,val,0);
+    else if(!strcmp(prop,"border_color"))lv_obj_set_style_border_color(o,lv_color_hex(val),0);
+    else if(!strcmp(prop,"pad_all"))     lv_obj_set_style_pad_all(o,val,0);
+    else if(!strcmp(prop,"shadow_w"))    lv_obj_set_style_shadow_width(o,val,0);
+    else if(!strcmp(prop,"shadow_ofs"))  lv_obj_set_style_shadow_ofs_y(o,val,0);
+    else if(!strcmp(prop,"text_align"))  lv_obj_set_style_text_align(o,val,0);
+    else if(!strcmp(prop,"font"))        lv_obj_set_style_text_font(o,val>20?&lv_font_montserrat_22:val>16?&lv_font_montserrat_18:&lv_font_montserrat_14,0);
+    else if(!strcmp(prop,"w"))           lv_obj_set_width(o,val);
+    else if(!strcmp(prop,"h"))           lv_obj_set_height(o,val);
+    else if(!strcmp(prop,"x"))           { int y=lv_obj_get_y2(o); lv_obj_set_pos(o,val,y); }
+    else if(!strcmp(prop,"y"))           { int x=lv_obj_get_x2(o); lv_obj_set_pos(o,x,val); }
+    else if(!strcmp(prop,"visible"))     val?lv_obj_clear_flag(o,LV_OBJ_FLAG_HIDDEN):lv_obj_add_flag(o,LV_OBJ_FLAG_HIDDEN);
+    JS_FreeCString(C,prop); return JS_UNDEFINED;
+}
+
+/* ---- httpGet (async curl, safe on LVGL thread) ---- */
+static char *g_http_body = NULL;
+static int   g_http_cbid = -1;
+static void http_fire_on_lvgl(void *unused) {
+    (void)unused;
+    if (g_http_cbid>=0 && g_js_ctx && g_running && g_http_body) {
+        JSValue arg=JS_NewString(g_js_ctx,g_http_body);
+        fire_callback_1(g_http_cbid, arg);
+        JS_FreeValue(g_js_ctx,arg);
+    }
+    g_http_cbid=-1;
+    free(g_http_body);g_http_body=NULL;
+}
+struct http_buf { char *data; size_t len; };
+static size_t http_write_cb(void *p, size_t s, size_t n, void *ud) {
+    struct http_buf *b=(struct http_buf*)ud;size_t sz=s*n;
+    b->data=(char*)realloc(b->data,b->len+sz+1);
+    memcpy(b->data+b->len,p,sz);b->len+=sz;b->data[b->len]=0;return sz;
+}
+static void *http_thread(void *arg) {
+    char *url=(char*)arg;struct http_buf body={NULL,0};CURL *c=curl_easy_init();if(c){
+    curl_easy_setopt(c,CURLOPT_URL,url);curl_easy_setopt(c,CURLOPT_WRITEFUNCTION,http_write_cb);
+    curl_easy_setopt(c,CURLOPT_WRITEDATA,&body);curl_easy_setopt(c,CURLOPT_TIMEOUT,10L);
+    curl_easy_setopt(c,CURLOPT_SSL_VERIFYPEER,0L);curl_easy_perform(c);curl_easy_cleanup(c);}
+    g_http_body=body.data?body.data:strdup("");lv_async_call(http_fire_on_lvgl,NULL);free(url);return NULL;
+}
+static JSValue js_http_get(JSContext *C, JSValue T, int N, JSValue *A) {
+    (void)T;if(N<2||!JS_IsFunction(C,A[1]))return JS_UNDEFINED;
+    g_http_cbid=store_callback(C,A[1]);
+    const char *url=JS_ToCString(C,A[0]);
+    pthread_t t;pthread_create(&t,NULL,http_thread,strdup(url));pthread_detach(t);
+    JS_FreeCString(C,url);return JS_UNDEFINED;
 }
 
 /* ---- exit ---- */
@@ -579,12 +698,12 @@ static int g_timer_count = 0;
 static void js_timer_cb(lv_timer_t * t) {
     for (int i = 0; i < g_timer_count; i++) {
         if (g_timers[i].timer == t) {
-            JS_LOG("js_timer_cb(timer_id=%d) → cbid=%d", i, g_timers[i].cbid);
+            /* JS_LOG("js_timer_cb(timer_id=%d) → cbid=%d", i, g_timers[i].cbid); */
             fire_callback(g_timers[i].cbid);
             return;
         }
     }
-    JS_LOG("js_timer_cb: unknown timer %p", (void*)t);
+    /* JS_LOG("js_timer_cb: unknown timer %p", (void*)t); */
 }
 static JSValue js_set_interval(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N < 2 || !JS_IsFunction(C, A[1]) || g_timer_count >= 64)
@@ -668,6 +787,11 @@ static void register_full_api(JSContext * ctx) {
     L(js_get_env,       "getEnv",         2);
     L(js_set_fps,       "setFPS",         1);
     L(js_hide_back_btn, "hideBackButton", 0);
+    L(js_keyboard,      "keyboard",       1);
+    L(js_dropdown,      "dropdown",       4);
+    L(js_dropdown_set,  "dropdownSet",    2);
+    L(js_style,         "style",          3);
+    L(js_http_get,      "httpGet",        2);
     L(js_exit,          "exit",           0);
     L(js_set_interval,  "setInterval",    2);
     L(js_clear_interval,"clearInterval",  1);
@@ -761,6 +885,7 @@ void js_engine_cleanup(void) {
 
     /* 5. Reset all state */
     g_widget_count = 0; g_cb_count = 0;
+    g_press_cbid = g_release_cbid = -1;
     memset(g_widgets, 0, sizeof(g_widgets));
     memset(g_callbacks, 0, sizeof(g_callbacks));
     memset(g_timers, 0, sizeof(g_timers));

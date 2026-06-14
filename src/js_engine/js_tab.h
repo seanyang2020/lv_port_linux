@@ -27,6 +27,7 @@ extern "C" {
 
 lv_obj_t * lv_js_tab_create(lv_obj_t * parent);
 void lv_js_tab_return(void);
+void lv_js_tab_refresh(void);
 
 #ifdef __cplusplus
 }
