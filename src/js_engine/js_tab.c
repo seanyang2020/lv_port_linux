@@ -185,7 +185,7 @@ static void launch_app(int idx)
     g_ctx.current_app_idx = idx;
     js_app_t * app = &g_ctx.apps[idx];
 
-    LV_LOG_USER("[js_tab] launching: %s", app->name);
+    JS_LOG("launch_app('%s')  prev_screen=%p", app->name, (void*)lv_screen_active());
 
     /* Save the current screen so we can restore it on return */
     g_ctx.prev_screen = lv_screen_active();
@@ -245,7 +245,8 @@ static void tick_timer_cb(lv_timer_t * t)
 static void do_return_to_list(void * unused)
 {
     (void)unused;
-    LV_LOG_USER("[js_tab] returning to app list");
+    JS_LOG("do_return_to_list()  js_screen=%p  prev_screen=%p",
+           (void*)g_ctx.js_screen, (void*)g_ctx.prev_screen);
 
     if (g_ctx.tick_timer) {
         lv_timer_delete(g_ctx.tick_timer);
@@ -270,9 +271,7 @@ static void do_return_to_list(void * unused)
 static void back_btn_event_cb(lv_event_t * e)
 {
     (void)e;
-    /* Defer: we're inside g_ctx.back_btn's event handler.  Deleting
-     * js_screen (which is back_btn's parent) from here would free
-     * the button while LVGL is still processing its event → crash. */
+    JS_LOG("*** BACK BUTTON CLICKED *** → scheduling cleanup");
     lv_async_call(do_return_to_list, NULL);
 }
 
@@ -284,6 +283,7 @@ static void back_btn_event_cb(lv_event_t * e)
  */
 void lv_js_tab_return(void)
 {
+    JS_LOG("lv_js_tab_return() called  js_screen=%p", (void*)g_ctx.js_screen);
     if (!g_ctx.js_screen) return;
     lv_async_call(do_return_to_list, NULL);
 }

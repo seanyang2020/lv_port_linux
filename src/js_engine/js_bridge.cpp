@@ -91,6 +91,7 @@ static lv_obj_t * extract_parent(JSContext * C, int * pN, JSValue * A, int base_
     return lv_screen_active();
 }
 static void fire_callback(int cb_id) {
+    JS_LOG("fire_callback(%d)  total_cbs=%d  ctx=%p", cb_id, g_cb_count, (void*)g_js_ctx);
     if (cb_id < 0 || cb_id >= g_cb_count || !g_js_ctx) return;
     JSValue ret = JS_Call(g_js_ctx, g_callbacks[cb_id], JS_UNDEFINED, 0, NULL);
     if (JS_IsException(ret)) {
@@ -472,7 +473,9 @@ static JSValue js_on_change(JSContext * C, JSValue T, int N, JSValue * A) {
 
 /* ---- exit ---- */
 static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)C; (void)T; (void)N; (void)A; lv_js_tab_return(); return JS_UNDEFINED;
+    (void)C; (void)T; (void)N; (void)A;
+    JS_LOG("*** JS exit() called ***");
+    lv_js_tab_return(); return JS_UNDEFINED;
 }
 
 /* ---- timer ---- */
@@ -481,10 +484,13 @@ static lv_timer_t * g_timers[64];
 static int        g_timer_count = 0;
 
 static void js_timer_cb(lv_timer_t * t) {
-    /* Find the timer index */
     for (int i = 0; i < g_timer_count; i++) {
-        if (g_timers[i] == t) { fire_callback(i); return; }
+        if (g_timers[i] == t) {
+            JS_LOG("js_timer_cb(timer_id=%d) firing", i);
+            fire_callback(i); return;
+        }
     }
+    JS_LOG("js_timer_cb: unknown timer %p", (void*)t);
 }
 static JSValue js_set_interval(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N < 2 || !JS_IsFunction(C, A[1]) || g_timer_count >= 64) return JS_NewInt32(C, -1);
@@ -493,6 +499,7 @@ static JSValue js_set_interval(JSContext * C, JSValue T, int N, JSValue * A) {
     int tid = g_timer_count;
     g_timers[tid] = lv_timer_create(js_timer_cb, (uint32_t)ms, NULL);
     g_timer_count++;
+    JS_LOG("setInterval(ms=%d) → tid=%d cbid=%d", ms, tid, cid);
     return JS_NewInt32(C, tid);
 }
 static JSValue js_clear_interval(JSContext * C, JSValue T, int N, JSValue * A) {
@@ -600,10 +607,12 @@ int js_engine_run_script(const char * path) {
     JS_SetPropertyStr(ctx, g, "__dirname", JS_NewString(ctx, dirbuf));
     JS_FreeValue(ctx, g);
 
+    JS_LOG("eval: %s  __dirname=%s", path, dirbuf);
     JSValue r = TJS_EvalScript(ctx, path);
     if (JS_IsException(r)) {
         JSValue e = JS_GetException(ctx);
         const char * s = JS_ToCString(ctx, e);
+        JS_LOG("EXCEPTION: %s", s ? s : "?");
         fprintf(stderr, "[js_engine] JS exception in %s:\n%s\n", path, s ? s : "?");
         if (s) JS_FreeCString(ctx, s); JS_FreeValue(ctx, e); JS_FreeValue(ctx, r);
         return -1;

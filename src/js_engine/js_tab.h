@@ -12,25 +12,20 @@
 
 #if LV_USE_JS_ENGINE
 
+/* ---- Debug logging: set to 1 to trace JS lifecycle events ---- */
+#define JS_DEBUG 1
+
+#if JS_DEBUG
+#define JS_LOG(fmt, ...) LV_LOG_USER("[js-debug] " fmt, ##__VA_ARGS__)
+#else
+#define JS_LOG(fmt, ...) ((void)0)
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * Create the JS Apps list UI inside @p parent.
- *
- * @param parent  parent object (typically a tab page)
- * @return the container object (the app-list screen)
- */
 lv_obj_t * lv_js_tab_create(lv_obj_t * parent);
-
-/**
- * Trigger a return from the currently-running JS app back to the
- * app list.  Safe to call from JS (via lvgljs.exit()) or from any
- * LVGL event handler.
- *
- * Does nothing if no JS app is currently running.
- */
 void lv_js_tab_return(void);
 
 #ifdef __cplusplus
