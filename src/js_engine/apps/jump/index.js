@@ -236,13 +236,13 @@ function initPlatforms(){
     var lastX=-50,lastW=110;
     // First platform under character
     var p0=getPoolObj();
-    p0.x=CX-55;p0.y=0;p0.w=110;p0.h=22;p0.type=1;p0.color="0x64748B";p0.cx=CX;p0.gotBonus=false;p0.visible=true;
+    p0.x=CX-55;p0.y=720;p0.w=110;p0.h=22;p0.type=1;p0.color="0x64748B";p0.cx=CX;p0.gotBonus=false;p0.visible=true;
     lvgljs.setPos(p0.obj,p0.x,p0.y);lvgljs.setSize(p0.obj,110,22);lvgljs.setBgColor(p0.obj,0x64748B);
     lvgljs.setVisible(p0.obj,1);
     lastX=CX-55;lastW=110;
     for(var i=0;i<6;i++){
         var np=newPlatform(lastX,lastW);
-        np.y=780+Math.random()*40;
+        np.y=720+Math.random()*40;
         var po=getPoolObj();
         po.x=np.x;po.y=np.y;po.w=np.w;po.h=np.h;po.type=np.type;po.color=np.color;po.cx=np.cx;po.gotBonus=false;po.visible=true;
         lvgljs.setPos(po.obj,po.x,po.y);lvgljs.setSize(po.obj,po.w,po.h);lvgljs.setBgColor(po.obj,parseInt(po.color));

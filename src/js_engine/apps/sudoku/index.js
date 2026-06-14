@@ -215,15 +215,15 @@ function showLoadPopup(idx){
 var bottomBar=lvgljs.panel(0,W.h-72,W.w,72);
 lvgljs.setBgColor(bottomBar,0x2a2a3e);lvgljs.setOpacity(bottomBar,255);lvgljs.setRadius(bottomBar,0);
 var statusLbl=lvgljs.label("",20,6,bottomBar);lvgljs.setTextColor(statusLbl,0xCCCCCC);lvgljs.setFont(statusLbl,18);
-var saveNameBox=lvgljs.textbox(20,32,160,32,bottomBar);
-lvgljs.setText(saveNameBox,"save1");lvgljs.setBgColor(saveNameBox,0x444455);lvgljs.setTextColor(saveNameBox,0xFFFFFF);
+// saveNameBox replaced by popup
+
 
 function addBtn(text,x,cb){
     var b=lvgljs.btn(text,x,30,80,36,cb,bottomBar);lvgljs.setRadius(b,6);lvgljs.setFont(b,16);lvgljs.setBgColor(b,0x444455);return b;
 }
-addBtn("Save",W.w-480,function(){saveGame();});
+addBtn("Save",W.w-480,function(){showSavePopup();});
 addBtn("Load",W.w-390,function(){loadGame();});
-addBtn("Del",W.w-300,function(){deleteSave(lvgljs.getText(saveNameBox).trim());});
+addBtn("Del",W.w-300,function(){showDeletePopup();});
 addBtn("Hint",W.w-210,function(){
     if(selectedR>=0&&selectedC>=0&&!fixed[selectedR][selectedC]){board[selectedR][selectedC]=solution[selectedR][selectedC];filled++;selectedR=selectedC=-1;hidePopup();renderBoard();updateStatus();checkComplete();}
 });
