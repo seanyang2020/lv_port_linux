@@ -57,13 +57,6 @@ function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".p
 
 // Screen
 lvgljs.screenColor(0xD2E0EB);
-/* Reliable close button — LVGL button, no image dependency */
-var closeBtn = lvgljs.btn("X", W.w-56, 8, 48, 48, function(){ lvgljs.exit(); });
-lvgljs.setRadius(closeBtn, 24);
-lvgljs.setBgColor(closeBtn, 0x333333);
-lvgljs.setOpacity(closeBtn, 120);
-lvgljs.setTextColor(closeBtn, 0xFFFFFF);
-lvgljs.setFont(closeBtn, 22);
 
 var m=20, gap=24, panW=isLand?598:W.w-m*2, wxH=isLand?700:550;
 var calY=isLand?m+gap:m+wxH+gap, calH=isLand?700:W.h-calY-m;
@@ -144,8 +137,15 @@ function updateAll() {
     var yi=D.yi[idx], ji=D.yi[(idx+2)%8];
     lvgljs.setText(hlLabel, D.fmtHuangli(yi,ji));
 }
+/* Close button — created LAST, brought to front so panels don't cover it */
+var closeBtn = lvgljs.btn("X", W.w-56, 8, 48, 48, function(){ lvgljs.exit(); });
+lvgljs.setRadius(closeBtn, 24);
+lvgljs.setBgColor(closeBtn, 0x333333);
+lvgljs.setOpacity(closeBtn, 120);
+lvgljs.setTextColor(closeBtn, 0xFFFFFF);
+lvgljs.setFont(closeBtn, 22);
+lvgljs.toFront(closeBtn);
+
 updateAll();
 lvgljs.setInterval(1000, updateAll);
-/* Keep system back button visible — reliable fallback.
- * The weather_close.png is decorative if skin images are present. */
 lvgljs.print("Weather ready ["+L+"]");

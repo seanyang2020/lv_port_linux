@@ -494,6 +494,14 @@ static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
     return JS_UNDEFINED;
 }
 
+/* ---- toFront (bring widget to top of z-order) ---- */
+static JSValue js_to_front(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int id; JS_ToInt32(C, &id, A[0]); (void)N;
+    lv_obj_t * o = get_widget(id);
+    if (o) lv_obj_move_foreground(o);
+    return JS_UNDEFINED;
+}
+
 /* ---- exit ---- */
 static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)C; (void)T; (void)N; (void)A;
@@ -588,6 +596,7 @@ static void register_full_api(JSContext * ctx) {
     L(js_on_click,      "onClick",        2);
     L(js_on_change,     "onChange",       2);
 
+    L(js_to_front,      "toFront",        1);
     /* control */
     L(js_get_env,       "getEnv",         2);
     L(js_hide_back_btn, "hideBackButton", 0);
