@@ -237,43 +237,55 @@ static void tick_timer_cb(lv_timer_t * t)
 /**
  * Back button callback — return to app list.
  */
-static void back_btn_event_cb(lv_event_t * e)
-{
-    (void)e;
-    return_to_list();
-}
-
 /**
- * Return from the JS app to the widgets demo screen.
+ * Actual cleanup — safe to call from any context.
+ * Separated from event callbacks to avoid deleting widgets
+ * from within their own event handlers (→ use-after-free crash).
  */
-static void return_to_list(void)
+static void do_return_to_list(void * unused)
 {
+    (void)unused;
     LV_LOG_USER("[js_tab] returning to app list");
 
-    /* Stop JS engine first (deletes libuv timer, frees runtime) */
     if (g_ctx.tick_timer) {
         lv_timer_delete(g_ctx.tick_timer);
         g_ctx.tick_timer = NULL;
     }
 
-    /* 1. Restore previous screen first (cannot delete active screen) */
     if (g_ctx.prev_screen) {
         lv_screen_load(g_ctx.prev_screen);
     }
 
-    /* 2. Delete JS screen + all its widget children.
-     *    Must happen BEFORE js_engine_cleanup() because widget event
-     *    callbacks reference JS functions — they need a live runtime. */
     if (g_ctx.js_screen) {
         lv_obj_delete(g_ctx.js_screen);
         g_ctx.js_screen = NULL;
     }
 
-    /* 3. Now safe to free JS runtime (no more widget callbacks pending) */
     js_engine_cleanup();
 
     g_ctx.back_btn = NULL;
     g_ctx.prev_screen = NULL;
+}
+
+static void back_btn_event_cb(lv_event_t * e)
+{
+    (void)e;
+    /* Defer: we're inside g_ctx.back_btn's event handler.  Deleting
+     * js_screen (which is back_btn's parent) from here would free
+     * the button while LVGL is still processing its event → crash. */
+    lv_async_call(do_return_to_list, NULL);
+}
+
+/**
+ * Programmatic return from JS (lvgljs.exit()).
+ * Called from js_bridge.cpp via QuickJS — also inside an LVGL
+ * event handler (e.g. btn_event_cb → fire_callback → JS exit).
+ * Must defer for the same reason.
+ */
+void lv_js_tab_return(void)
+{
+    if (!g_ctx.js_screen) return;
+    lv_async_call(do_return_to_list, NULL);
 }
 
 /**********************
@@ -289,16 +301,6 @@ lv_obj_t * lv_js_tab_create(lv_obj_t * parent)
     create_list_ui();
 
     return parent;
-}
-
-/**
- * Called from JS (lvgljs.exit()) or programmatically to return
- * to the app list while a JS app is running.
- */
-void lv_js_tab_return(void)
-{
-    if (!g_ctx.js_screen) return;  /* no JS app running */
-    return_to_list();
 }
 
 #endif /* LV_USE_JS_ENGINE */
