@@ -11,7 +11,7 @@ var SAVE_PROG = DIR + "/save/progress.json";
 // ============================================================
 var T = {
     bg: 0xF0F0F0,         dark: 0xE0E4EC,       light: 0xF5F6FA,
-    grid: 0xCCCCCC,        sel: 0xBBC8E8,         same: 0xD0D8F0,
+    grid: 0x888888,        sel: 0xBBC8E8,         same: 0xD0D8F0,
     conflict: 0xFFCCCC,    hint: 0x111111,        user: 0x3366CC,
     accent: 0x3366CC
 };
@@ -219,7 +219,7 @@ for (var r = 0; r < 9; r++) {
     }
 }
 
-// Region borders (thicker lines for 3x3 boxes)
+// Region borders (darker) (thicker lines for 3x3 boxes)
 for (var i = 1; i < 3; i++) {
     var hy = boardY + i * cellSize * 3;
     var hLine = lvgljs.panel(boardX, hy-1, cellSize*9, 3);
@@ -297,16 +297,16 @@ var statusLbl = lvgljs.label("Filled: 0/81", 20, 14, bottomBar);
 lvgljs.setTextColor(statusLbl, 0xCCCCCC); lvgljs.setFont(statusLbl, 18);
 
 function addBtn(text, x, cb) {
-    var b = lvgljs.btn(text, x, 8, 90, 40, cb, bottomBar);
+    var b = lvgljs.btn(text, x, 8, 80, 36, cb, bottomBar);
     lvgljs.setRadius(b, 6); lvgljs.setFont(b, 16);
     lvgljs.setBgColor(b, 0x444455);
     return b;
 }
-addBtn("New",    W.w - 640, function(){ generate(difficulty); renderBoard(); updateStatus(); timerSec=0; });
-addBtn("Save",   W.w - 540, saveGame);
-addBtn("Load",   W.w - 440, function(){ if(loadGame()){ renderBoard(); updateStatus(); } });
-addBtn("Delete", W.w - 340, function(){ lvgljs.deleteFile(SAVE_ORIG); lvgljs.deleteFile(SAVE_PROG); lvgljs.print("Save deleted"); });
-addBtn("Hint", W.w - 240, function(){
+addBtn("New",   W.w - 570, function(){ generate(difficulty); renderBoard(); updateStatus(); timerSec=0; });
+addBtn("Save",  W.w - 480, saveGame);
+addBtn("Load",  W.w - 390, function(){ if(loadGame()){ renderBoard(); updateStatus(); } });
+addBtn("Del",   W.w - 300, function(){ lvgljs.deleteFile(SAVE_ORIG); lvgljs.deleteFile(SAVE_PROG); lvgljs.print("Save deleted"); });
+addBtn("Hint",  W.w - 210, function(){
     if (selectedR >= 0 && selectedC >= 0 && !fixed[selectedR][selectedC]) {
         board[selectedR][selectedC] = solution[selectedR][selectedC];
         if (board[selectedR][selectedC] !== 0) filled++;
