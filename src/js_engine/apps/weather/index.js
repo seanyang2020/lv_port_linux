@@ -26,8 +26,6 @@ function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".p
 
 // Screen
 lvgljs.screenColor(0xD2E0EB);
-lvgljs.image(SKIN+"weather_close.png", W.w-68, 8, 60, 60).onClick(function(){lvgljs.exit();});
-// Workaround: onClick returns undefined; attach separately
 var closeImg = lvgljs.image(SKIN+"weather_close.png", W.w-68, 8, 60, 60);
 lvgljs.onClick(closeImg, function(){ lvgljs.exit(); });
 
