@@ -490,7 +490,11 @@ extern "C" { extern lv_obj_t * js_get_back_btn(void); }
 static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)C; (void)T; (void)N; (void)A;
     lv_obj_t * btn = js_get_back_btn();
-    if (btn) lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    JS_LOG("hideBackButton: btn=%p", (void*)btn);
+    if (btn) {
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+        JS_LOG("hideBackButton: flagged HIDDEN");
+    }
     return JS_UNDEFINED;
 }
 
