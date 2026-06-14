@@ -498,6 +498,22 @@ static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
     return JS_UNDEFINED;
 }
 
+/* ---- global press/release (for games) ---- */
+static int  g_press_cbid = -1;
+static int  g_release_cbid = -1;
+static void global_press_cb(lv_event_t * e) { (void)e; fire_callback(g_press_cbid); }
+static void global_release_cb(lv_event_t * e) { (void)e; fire_callback(g_release_cbid); }
+static JSValue js_on_press(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
+    if (g_press_cbid < 0) lv_obj_add_event_cb(lv_screen_active(), global_press_cb, LV_EVENT_PRESSED, NULL);
+    g_press_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
+}
+static JSValue js_on_release(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
+    if (g_release_cbid < 0) lv_obj_add_event_cb(lv_screen_active(), global_release_cb, LV_EVENT_RELEASED, NULL);
+    g_release_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
+}
+
 /* ---- toFront (bring widget to top of z-order) ---- */
 static JSValue js_to_front(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; int id; JS_ToInt32(C, &id, A[0]); (void)N;
@@ -632,6 +648,8 @@ static void register_full_api(JSContext * ctx) {
     /* events */
     L(js_on_click,      "onClick",        2);
     L(js_on_change,     "onChange",       2);
+    L(js_on_press,      "onPress",        1);
+    L(js_on_release,    "onRelease",      1);
 
     L(js_to_front,      "toFront",        1);
     L(js_read_file,     "readFile",       1);
