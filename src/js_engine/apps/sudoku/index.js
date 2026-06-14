@@ -302,9 +302,10 @@ function addBtn(text, x, cb) {
     lvgljs.setBgColor(b, 0x444455);
     return b;
 }
-addBtn("New", W.w - 540, function(){ generate(difficulty); renderBoard(); updateStatus(); timerSec=0; });
-addBtn("Save", W.w - 440, saveGame);
-addBtn("Load", W.w - 340, function(){ if(loadGame()){ renderBoard(); updateStatus(); } });
+addBtn("New",    W.w - 640, function(){ generate(difficulty); renderBoard(); updateStatus(); timerSec=0; });
+addBtn("Save",   W.w - 540, saveGame);
+addBtn("Load",   W.w - 440, function(){ if(loadGame()){ renderBoard(); updateStatus(); } });
+addBtn("Delete", W.w - 340, function(){ lvgljs.deleteFile(SAVE_ORIG); lvgljs.deleteFile(SAVE_PROG); lvgljs.print("Save deleted"); });
 addBtn("Hint", W.w - 240, function(){
     if (selectedR >= 0 && selectedC >= 0 && !fixed[selectedR][selectedC]) {
         board[selectedR][selectedC] = solution[selectedR][selectedC];

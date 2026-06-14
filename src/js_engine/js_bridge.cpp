@@ -539,6 +539,12 @@ static JSValue js_write_file(JSContext * C, JSValue T, int N, JSValue * A) {
     if (data) JS_FreeCString(C, data);
     return ok ? JS_TRUE : JS_FALSE;
 }
+static JSValue js_delete_file(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * path = N > 0 ? JS_ToCString(C, A[0]) : NULL;
+    int ok = path ? (remove(path) == 0) : 0;
+    if (path) JS_FreeCString(C, path);
+    return ok ? JS_TRUE : JS_FALSE;
+}
 
 /* ---- timer ---- */
 /* Each timer stores its LVGL timer pointer + the callback ID it should fire */
@@ -630,6 +636,7 @@ static void register_full_api(JSContext * ctx) {
     L(js_to_front,      "toFront",        1);
     L(js_read_file,     "readFile",       1);
     L(js_write_file,    "writeFile",      2);
+    L(js_delete_file,   "deleteFile",     1);
     /* control */
     L(js_get_env,       "getEnv",         2);
     L(js_hide_back_btn, "hideBackButton", 0);
