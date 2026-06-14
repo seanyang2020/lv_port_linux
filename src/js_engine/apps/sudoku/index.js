@@ -13,7 +13,7 @@ var T = {
     bg: 0xF0F0F0,         dark: 0xE0E4EC,       light: 0xF5F6FA,
     grid: 0x888888,        sel: 0xBBC8E8,         same: 0xD0D8F0,
     conflict: 0xFFCCCC,    hint: 0x111111,        user: 0x3366CC,
-    accent: 0x3366CC
+    accent: 0x224488
 };
 
 // ============================================================
@@ -222,11 +222,13 @@ for (var r = 0; r < 9; r++) {
 // Region borders (darker) (thicker lines for 3x3 boxes)
 for (var i = 1; i < 3; i++) {
     var hy = boardY + i * cellSize * 3;
-    var hLine = lvgljs.panel(boardX, hy-1, cellSize*9, 3);
+    var hLine = lvgljs.panel(boardX, hy-2, cellSize*9, 4);
     lvgljs.setBgColor(hLine, T.accent); lvgljs.setOpacity(hLine, 255); lvgljs.setRadius(hLine, 0);
+    lvgljs.toFront(hLine);
     var vx = boardX + i * cellSize * 3;
-    var vLine = lvgljs.panel(vx-1, boardY, 3, cellSize*9);
+    var vLine = lvgljs.panel(vx-2, boardY, 4, cellSize*9);
     lvgljs.setBgColor(vLine, T.accent); lvgljs.setOpacity(vLine, 255); lvgljs.setRadius(vLine, 0);
+    lvgljs.toFront(vLine);
 }
 
 // ---- Popup number picker ----
@@ -290,14 +292,14 @@ function placeNumber(n) {
 }
 
 // ---- Bottom bar ----
-var bottomBar = lvgljs.panel(0, W.h - 56, W.w, 56);
+var bottomBar = lvgljs.panel(0, W.h - 72, W.w, 72);
 lvgljs.setBgColor(bottomBar, 0x2a2a3e); lvgljs.setOpacity(bottomBar, 255); lvgljs.setRadius(bottomBar, 0);
 
-var statusLbl = lvgljs.label("Filled: 0/81", 20, 14, bottomBar);
+var statusLbl = lvgljs.label("Filled: 0/81", 20, 6, bottomBar);
 lvgljs.setTextColor(statusLbl, 0xCCCCCC); lvgljs.setFont(statusLbl, 18);
 
 function addBtn(text, x, cb) {
-    var b = lvgljs.btn(text, x, 8, 80, 36, cb, bottomBar);
+    var b = lvgljs.btn(text, x, 30, 80, 36, cb, bottomBar);
     lvgljs.setRadius(b, 6); lvgljs.setFont(b, 16);
     lvgljs.setBgColor(b, 0x444455);
     return b;
