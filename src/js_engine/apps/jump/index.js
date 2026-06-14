@@ -258,4 +258,4 @@ function initPlatforms(){
 // Start
 // ============================================================
 initPlatforms();
-lvgljs.print("Jump ready");
+lvgljs.setFPS(30); lvgljs.print("Jump ready");

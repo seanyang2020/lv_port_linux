@@ -32,7 +32,8 @@
  **********************/
 #define MAX_WIDGETS    512
 #define MAX_CALLBACKS  256
-#define TICK_MS         30
+#define TICK_MS         100  /* ~10fps base — idle screens use minimal CPU.
+                                Apps needing smooth animation call setFPS(). */
 
 /**********************
  *  STATIC VARIABLES
@@ -483,9 +484,17 @@ static JSValue js_get_env(JSContext * C, JSValue T, int N, JSValue * A) {
     return r;
 }
 
+/* ---- setFPS (control render tick rate for CPU saving) ---- */
+static JSValue js_set_fps(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; int fps = 20; if (N > 0) JS_ToInt32(C, &fps, A[0]);
+    if (fps < 1) fps = 1; if (fps > 60) fps = 60;
+    uint64_t ms = 1000 / fps;
+    uv_timer_set_repeat(&g_render_timer, ms);
+    uv_timer_again(&g_render_timer);
+    return JS_UNDEFINED;
+}
+
 /* ---- hideBackButton ---- */
-/* JS calls this after rendering its own close UI to hide the system
- * safety-net back button.  If JS never calls it, the button stays. */
 extern "C" { extern lv_obj_t * js_get_back_btn(void); }
 static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)C; (void)T; (void)N; (void)A;
@@ -657,6 +666,7 @@ static void register_full_api(JSContext * ctx) {
     L(js_delete_file,   "deleteFile",     1);
     /* control */
     L(js_get_env,       "getEnv",         2);
+    L(js_set_fps,       "setFPS",         1);
     L(js_hide_back_btn, "hideBackButton", 0);
     L(js_exit,          "exit",           0);
     L(js_set_interval,  "setInterval",    2);
