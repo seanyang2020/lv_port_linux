@@ -513,6 +513,33 @@ static JSValue js_exit(JSContext * C, JSValue T, int N, JSValue * A) {
     lv_js_tab_return(); return JS_UNDEFINED;
 }
 
+/* ---- file I/O ---- */
+static JSValue js_read_file(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; const char * path = N > 0 ? JS_ToCString(C, A[0]) : NULL;
+    if (!path) return JS_NewString(C, "");
+    FILE * f = fopen(path, "rb");
+    if (!f) { JS_FreeCString(C, path); return JS_NewString(C, ""); }
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    char * buf = (char*)malloc(sz + 1);
+    if (buf) { fread(buf, 1, sz, f); buf[sz] = 0; }
+    fclose(f); JS_FreeCString(C, path);
+    JSValue r = JS_NewString(C, buf ? buf : "");
+    free(buf); return r;
+}
+static JSValue js_write_file(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)T; if (N < 2) return JS_FALSE;
+    const char * path = JS_ToCString(C, A[0]);
+    const char * data = JS_ToCString(C, A[1]);
+    int ok = 0;
+    if (path && data) {
+        FILE * f = fopen(path, "wb");
+        if (f) { ok = fwrite(data, 1, strlen(data), f) > 0; fclose(f); }
+    }
+    if (path) JS_FreeCString(C, path);
+    if (data) JS_FreeCString(C, data);
+    return ok ? JS_TRUE : JS_FALSE;
+}
+
 /* ---- timer ---- */
 /* Each timer stores its LVGL timer pointer + the callback ID it should fire */
 static struct { lv_timer_t * timer; int cbid; } g_timers[64];
@@ -601,6 +628,8 @@ static void register_full_api(JSContext * ctx) {
     L(js_on_change,     "onChange",       2);
 
     L(js_to_front,      "toFront",        1);
+    L(js_read_file,     "readFile",       1);
+    L(js_write_file,    "writeFile",      2);
     /* control */
     L(js_get_env,       "getEnv",         2);
     L(js_hide_back_btn, "hideBackButton", 0);
