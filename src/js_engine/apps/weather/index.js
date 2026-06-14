@@ -57,8 +57,13 @@ function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".p
 
 // Screen
 lvgljs.screenColor(0xD2E0EB);
-var closeImg = lvgljs.image(SKIN+"weather_close.png", W.w-68, 8, 60, 60);
-lvgljs.onClick(closeImg, function(){ lvgljs.print("close clicked!"); lvgljs.exit(); });
+/* Reliable close button — LVGL button, no image dependency */
+var closeBtn = lvgljs.btn("X", W.w-56, 8, 48, 48, function(){ lvgljs.exit(); });
+lvgljs.setRadius(closeBtn, 24);
+lvgljs.setBgColor(closeBtn, 0x333333);
+lvgljs.setOpacity(closeBtn, 120);
+lvgljs.setTextColor(closeBtn, 0xFFFFFF);
+lvgljs.setFont(closeBtn, 22);
 
 var m=20, gap=24, panW=isLand?598:W.w-m*2, wxH=isLand?700:550;
 var calY=isLand?m+gap:m+wxH+gap, calH=isLand?700:W.h-calY-m;
