@@ -483,17 +483,14 @@ static JSValue js_get_env(JSContext * C, JSValue T, int N, JSValue * A) {
     return r;
 }
 
-/* ---- showBackButton ---- */
-/* Access the back_btn from js_tab.c (extern linkage) */
+/* ---- hideBackButton ---- */
+/* JS calls this after rendering its own close UI to hide the system
+ * safety-net back button.  If JS never calls it, the button stays. */
 extern "C" { extern lv_obj_t * js_get_back_btn(void); }
-static JSValue js_show_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
-    (void)C; (void)T;
-    int show = 1; if (N > 0) JS_ToInt32(C, &show, A[0]);
+static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
+    (void)C; (void)T; (void)N; (void)A;
     lv_obj_t * btn = js_get_back_btn();
-    if (btn) {
-        if (show) lv_obj_remove_flag(btn, LV_OBJ_FLAG_HIDDEN);
-        else      lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
-    }
+    if (btn) lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
     return JS_UNDEFINED;
 }
 
@@ -593,7 +590,7 @@ static void register_full_api(JSContext * ctx) {
 
     /* control */
     L(js_get_env,       "getEnv",         2);
-    L(js_show_back_btn, "showBackButton", 1);
+    L(js_hide_back_btn, "hideBackButton", 0);
     L(js_exit,          "exit",           0);
     L(js_set_interval,  "setInterval",    2);
     L(js_clear_interval,"clearInterval",  1);
