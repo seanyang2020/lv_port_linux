@@ -12,6 +12,14 @@
 | `screenColor(hex)` | hex: `0xRRGGBB` | — | 设置屏幕背景色 |
 | `getScreenSize()` | — | `{w, h}` | 获取屏幕宽高 |
 | `exit()` | — | — | 退出当前 JS 应用，返回列表 |
+| `hideBackButton()` | — | — | 隐藏系统返回按钮（JS 自有退出UI时调用） |
+| `getEnv(name, def)` | name: 变量名, def: 默认值 | string | 读取进程环境变量 |
+
+### 1.1 全局变量
+
+| 变量 | 类型 | 说明 |
+|------|------|------|
+| `__dirname` | string | 当前 JS 文件所在目录的绝对路径 |
 
 ---
 
@@ -19,18 +27,16 @@
 
 所有创建函数返回一个 **整数 ID**，后续用此 ID 操作控件。
 
+**最后可选参数 `parentId`**：所有控件创建函数末尾可追加一个整数参数，指定父容器 ID。子控件坐标相对于父容器左上角。
+
 ### 2.1 label — 文本标签
 ```js
-var id = lvgljs.label(text, x, y);
+var id = lvgljs.label(text, x, y, [parentId]);
 ```
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| text | string | 显示文字 |
-| x, y | int | 位置（左上角） |
 
 ### 2.2 btn — 按钮
 ```js
-var id = lvgljs.btn(text, x, y, w, h, [callback]);
+var id = lvgljs.btn(text, x, y, w, h, [callback], [parentId]);
 ```
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -40,45 +46,40 @@ var id = lvgljs.btn(text, x, y, w, h, [callback]);
 
 ### 2.3 textbox — 单行文本框
 ```js
-var id = lvgljs.textbox(x, y, w, h);
+var id = lvgljs.textbox(x, y, w, h, [parentId]);
 ```
 
 ### 2.4 image — 图片
 ```js
-var id = lvgljs.image(path, x, y, w, h);
+var id = lvgljs.image(path, x, y, w, h, [parentId]);
 ```
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| path | string | 图片文件路径（PNG/JPEG/BMP） |
-| x, y, w, h | int | 位置和显示大小 |
-
-**注意**：图片路径必须是 LVGL 文件系统可访问的绝对路径（如 `/mnt/sdcard/sphoto/skin/weather_sunny.png`）。需要 LVGL 配置启用相应图片解码器（`LV_USE_LODEPNG`、`LV_USE_LIBJPEG_TURBO` 等）。
+图片路径使用 `__dirname + "/skin/xxx.png"` 实现自包含单包部署。
 
 ### 2.5 panel — 容器面板
 ```js
-var id = lvgljs.panel(x, y, w, h);
+var id = lvgljs.panel(x, y, w, h, [parentId]);
 ```
 默认样式：白色背景 80% 透明度、18px 圆角、无边框。
 
 ### 2.6 sw — 开关
 ```js
-var id = lvgljs.sw(x, y, [callback]);
+var id = lvgljs.sw(x, y, [callback], [parentId]);
 ```
 
 ### 2.7 slider — 滑动条
 ```js
-var id = lvgljs.slider(x, y, w, [min, max, val, callback]);
+var id = lvgljs.slider(x, y, w, [min, max, val, callback], [parentId]);
 ```
 默认 min=0, max=100, val=50。
 
 ### 2.8 checkbox — 复选框
 ```js
-var id = lvgljs.checkbox(text, x, y);
+var id = lvgljs.checkbox(text, x, y, [parentId]);
 ```
 
 ### 2.9 arc — 圆弧
 ```js
-var id = lvgljs.arc(x, y, size, [min, max, val]);
+var id = lvgljs.arc(x, y, size, [min, max, val], [parentId]);
 ```
 
 ---
@@ -89,11 +90,11 @@ var id = lvgljs.arc(x, y, size, [min, max, val]);
 
 | 函数 | 参数 | 说明 |
 |------|------|------|
-| `setText(id, text)` | text: string | 设置文字内容（label/textarea/checkbox） |
+| `setText(id, text)` | text: string | 设置文字内容 |
 | `setImage(id, path)` | path: string | 更换图片源 |
 | `setTextColor(id, hex)` | hex: `0xRRGGBB` | 文字颜色 |
 | `setBgColor(id, hex)` | hex: `0xRRGGBB` | 背景颜色 |
-| `setFont(id, size)` | size: 12/14/16/18/20/22/24/28/30/36/48 | 字体大小 |
+| `setFont(id, size\|name)` | int 或 "cjk" | 字体大小(12~48) 或 CJK 中文字体 |
 | `setRadius(id, r)` | r: int | 圆角半径 |
 | `setOpacity(id, opa)` | opa: 0-255 | 背景透明度（255=不透明） |
 | `setPos(id, x, y)` | x, y: int | 移动控件位置 |
@@ -103,6 +104,7 @@ var id = lvgljs.arc(x, y, size, [min, max, val]);
 | `setBorder(id, width, color)` | width: int, color: hex | 边框宽度和颜色 |
 | `setVisible(id, visible)` | visible: 0/1 | 显示/隐藏 |
 | `setAlign(id, type)` | type: 0=左 1=中 2=右 | 文字对齐 |
+| `toFront(id)` | — | 将控件提到最上层（解决面板遮挡） |
 
 ---
 
@@ -131,67 +133,98 @@ var id = lvgljs.arc(x, y, size, [min, max, val]);
 | `setInterval(ms, callback)` | ms: 毫秒, callback: function | timerId | 周期性定时器 |
 | `clearInterval(id)` | id: timerId | — | 取消定时器 |
 
-**注意**：`setInterval` 基于 LVGL timer 实现，精度约为 30ms。适合 UI 刷新，不适合高精度计时。
+精度约 30ms，适合 UI 刷新。退出时自动清理，无需手动释放。
 
 ---
 
-## 7. 可用字体大小
+## 7. 可用字体
 
-12, 14, 16, 18, 20, 22, 24, 28, 30, 36, 48
+| 值 | 字体 |
+|------|------|
+| 12, 14, 16, 18, 20, 22, 24, 28, 30, 36, 48 | Montserrat（西文） |
+| `"cjk"` | 思源黑体 CJK（中文） |
 
 ---
 
-## 8. 注意事项
+## 8. 应用开发指南
 
-### 8.1 控件 ID
-控件 ID 从 0 开始递增，每次运行 JS 脚本都会重置。不要在 `setInterval` 回调中依赖外部捕获的 ID——确保 ID 在回调执行时仍然有效。
+### 8.1 自包含单包部署
 
-### 8.2 图片路径
-图片必须使用设备上的绝对路径。ARM 设备上天气图标示例：
+每个应用是 `JS_APPS_DIR` 下的一个子目录：
+
 ```
-/mnt/sdcard/sphoto/skin/weather_sunny.png
-/mnt/sdcard/sphoto/skin/weather_cloudy.png
-/mnt/sdcard/sphoto/skin/weather_rainy.png
-/mnt/sdcard/sphoto/skin/weather_snowy.png
-/mnt/sdcard/sphoto/skin/weather_overcast.png
-/mnt/sdcard/sphoto/skin/weather_sunny_small.png
-/mnt/sdcard/sphoto/skin/weather_cloudy_small.png
-/mnt/sdcard/sphoto/skin/weather_rainy_small.png
-/mnt/sdcard/sphoto/skin/weather_snowy_small.png
-/mnt/sdcard/sphoto/skin/weather_overcast_small.png
+weather/
+├── index.js        ← 入口文件
+└── skin/           ← 图片等资源（通过 __dirname 相对引用）
+    ├── weather_sunny.png
+    └── ...
 ```
 
-### 8.3 颜色格式
+JS 中通过 `__dirname` 获取自身目录，拼接资源路径：
+```js
+var SKIN = __dirname + "/skin/";
+lvgljs.image(SKIN + "weather_sunny.png", x, y, w, h);
+```
+
+部署只需复制整个目录到设备：
+```bash
+cp -r src/js_engine/apps/weather /mnt/sdcard/js-app/weather
+```
+
+### 8.2 系统返回按钮与退出设计
+
+| 原则 | 说明 |
+|------|------|
+| **默认安全网** | 每个 JS 屏幕右上角自动显示半透明 ✕ 系统返回按钮 |
+| **JS 声明接管** | 应用提供自己的退出 UI 后，调用 `lvgljs.hideBackButton()` 隐藏系统按钮 |
+| **崩溃兜底** | 如果 JS 未调用 `hideBackButton()`，系统按钮始终可用 |
+
+**推荐模式**：
+```js
+// 1. 创建自己的关闭按钮（放在最后，toFront 确保可点击）
+var closeBtn = lvgljs.btn("X", W.w-56, 8, 48, 48, function() {
+    lvgljs.exit();
+});
+lvgljs.toFront(closeBtn);
+
+// 2. 隐藏系统按钮
+lvgljs.hideBackButton();
+```
+
+**注意**：关闭按钮必须 `toFront()` 或在所有面板之后创建，否则会被大面板遮挡导致点击无效。
+
+### 8.3 中英文双语
+
+通过环境变量 `LANG` 切换语言，JS 无需修改：
+
+```bash
+export LANG=zh_CN.UTF-8   # 中文
+export LANG=en_US.UTF-8   # 英文
+```
+
+```js
+var L = lvgljs.getEnv("LANG", "en").indexOf("zh") >= 0 ? "zh" : "en";
+var font = (L === "zh") ? "cjk" : 16;
+```
+
+### 8.4 颜色格式
+
 全部颜色使用 `0xRRGGBB` 十六进制格式，无 Alpha 通道。透明度通过 `setOpacity()` 单独设置。
 
-### 8.4 定时器清理
-`setInterval` 返回的 timerId 在退出 JS 应用时**自动清理**（`js_engine_cleanup()` 会删除所有 LVGL timer）。如果需要在运行中取消定时器，调用 `clearInterval(id)`。
+### 8.5 内存限制
 
-### 8.5 JS 内置对象
-QuickJS 支持以下标准内置对象：`Date`, `Math`, `JSON`, `Array`, `String`, `Object`, `Number`, `Boolean`, `parseInt`, `parseFloat`, `isNaN`。
+控件总数 512，回调总数 256。超限静默失败（返回 -1）。退出时全部自动释放。
 
-txiki.js 额外提供：`setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`。
+### 8.6 错误排查
 
-**注意**：txiki.js 的 `setTimeout`/`setInterval` 基于 libuv 事件循环，而 `lvgljs.setInterval` 基于 LVGL timer。两者均可使用，但 LVGL timer 更可靠（与 UI 刷新同步）。
+JS 异常打印到终端 `[js_engine] JS exception`。开启调试日志：
 
-### 8.6 内存
-每个控件和回调都会分配内存。控件总数限制 512 个，回调总数限制 256 个。超过限制会静默失败（返回 -1）。
+```c
+// src/js_engine/js_tab.h 第 17 行
+#define JS_DEBUG 1   // 设为 0 关闭
+```
 
-### 8.7 错误处理
-JS 异常会打印到 stderr 和 LVGL log。如果点击 JS app 后没有任何反应：
-1. 检查终端输出的 `[js_engine] JS exception` 错误消息
-2. 确认文件路径、函数名拼写正确
-3. 确认使用的 API 函数存在（参考本文档）
-
-### 8.8 返回和清理
-点击右上角 ✕ 或调用 `lvgljs.exit()` 会触发完整的清理流程：
-1. 停止所有 LVGL timer
-2. 释放所有 JS 回调
-3. 删除 JS screen 及其上的所有控件
-4. 释放 QuickJS 运行时
-5. 恢复上一个 screen（widgets demo）
-
-控件和回调不需要手动释放。
+调试日志前缀 `[js-debug]`，覆盖：启动、退出、定时器触发、回调执行。
 
 ---
 
@@ -206,37 +239,49 @@ lvgljs.btn("Click Me", 30, 150, 140, 48, function() {
 });
 ```
 
-### 9.2 带定时器的计数器
+### 9.2 带关闭按钮的完整应用
 ```js
+var W = lvgljs.getScreenSize();
 lvgljs.screenColor(0x0d1b3e);
+
+// 自建关闭按钮（最后创建，toFront 确保不被遮挡）
+var close = lvgljs.btn("X", W.w-56, 8, 48, 48, function() { lvgljs.exit(); });
+lvgljs.setRadius(close, 24);
+lvgljs.setBgColor(close, 0x333333);
+lvgljs.setOpacity(close, 120);
+lvgljs.toFront(close);
+lvgljs.hideBackButton();
+
+// 应用内容...
+lvgljs.label("My App", 30, 60);
+```
+
+### 9.3 带定时器的计数器
+```js
 var count = 0;
 var label = lvgljs.label("Count: 0", 30, 60);
-lvgljs.setFont(label, 30);
-
 lvgljs.setInterval(1000, function() {
     count++;
     lvgljs.setText(label, "Count: " + count);
 });
 ```
 
-### 9.3 Switch + Slider 联动
+### 9.4 嵌套布局
 ```js
-lvgljs.screenColor(0x202020);
-var sw = lvgljs.sw(30, 60);
-var sl = lvgljs.slider(30, 120, 250, 0, 100, 50, function() {
-    var val = lvgljs.getValue(sl);
-    lvgljs.setText(valLabel, "Value: " + val);
-});
-var valLabel = lvgljs.label("Value: 50", 30, 170);
-lvgljs.setTextColor(valLabel, 0xFFFFFF);
+var panel = lvgljs.panel(20, 60, 300, 200);
+lvgljs.label("Title", 10, 10, panel);    // 子控件，坐标相对 panel
+lvgljs.btn("OK", 10, 50, 80, 40, function() {
+    lvgljs.print("clicked");
+}, panel);                               // parent 放在最后
 ```
 
-### 9.4 图片显示
+### 9.5 中英文双语
 ```js
-var img = lvgljs.image("/mnt/sdcard/img/photo.png", 50, 50, 300, 200);
-
-// 点击更换图片
-lvgljs.btn("Next", 50, 280, 100, 44, function() {
-    lvgljs.setImage(img, "/mnt/sdcard/img/photo2.png");
-});
+var L = lvgljs.getEnv("LANG", "en").indexOf("zh") >= 0 ? "zh" : "en";
+var T = {
+    zh: { hello: "你好" },
+    en: { hello: "Hello" }
+};
+lvgljs.label(T[L].hello, 30, 60);
+lvgljs.setFont(id, L === "zh" ? "cjk" : 16);
 ```
