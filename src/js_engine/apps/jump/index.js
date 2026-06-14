@@ -17,34 +17,34 @@ var hs=lvgljs.readFile(__dirname+"/highscore.txt");
 if(hs)highScore=parseInt(hs)||0;
 
 // Colors
-var COLORS_A=["0xFF6B6B","0x4ECDC4","0xFFE66D","0xA78BFA","0xF97316","0xEC4899","0x14B8A6"];
-var COLORS_B=["0x94A3B8","0x64748B","0x475569"];
-var COLORS_C=["0xCBD5E1","0xE2E8F0","0xD1D5DB"];
+var COLORS_A=["0xE74C3C","0x2ECC71","0xF1C40F","0x9B59B6","0xE67E22","0x1ABC9C","0x3498DB"];
+var COLORS_B=["0x7F8C8D","0x95A5A6","0x5D6D7E"];
+var COLORS_C=["0x566573","0x6C7A89","0x4A5568"];
 
 // ============================================================
 // UI
 // ============================================================
-lvgljs.screenColor(0xE8ECF0);
+lvgljs.screenColor(0x2C3E50);
 lvgljs.btn("X",WW-52,8,44,44,function(){lvgljs.exit();});
 lvgljs.hideBackButton();
 
 // Score display
 scoreLbl=lvgljs.label("0",WW-130,20);
-lvgljs.setTextColor(scoreLbl,0xFFFFFF);lvgljs.setFont(scoreLbl,28);
+lvgljs.setTextColor(scoreLbl,0xF39C12);lvgljs.setFont(scoreLbl,28);
 highLbl=lvgljs.label("Best: "+highScore,WW-200,55);
-lvgljs.setTextColor(highLbl,0xAAAAAA);lvgljs.setFont(highLbl,14);
+lvgljs.setTextColor(highLbl,0x7F8C8D);lvgljs.setFont(highLbl,14);
 statusLbl=lvgljs.label("Tap to jump",260,600);
-lvgljs.setTextColor(statusLbl,0x888888);lvgljs.setFont(statusLbl,22);
+lvgljs.setTextColor(statusLbl,0x95A5A6);lvgljs.setFont(statusLbl,22);
 
 // Character: white circle head + triangle body
-headObj=lvgljs.panel(CX-12,0,24,24);lvgljs.setBgColor(headObj,0xFFFFFF);
+headObj=lvgljs.panel(CX-12,0,24,24);lvgljs.setBgColor(headObj,0xF39C12);
 lvgljs.setRadius(headObj,12);lvgljs.setOpacity(headObj,255);
-bodyObj=lvgljs.panel(CX-16,24,32,28);lvgljs.setBgColor(bodyObj,0xFFFFFF);lvgljs.setOpacity(bodyObj,255);
+bodyObj=lvgljs.panel(CX-16,24,32,28);lvgljs.setBgColor(bodyObj,0xF39C12);lvgljs.setOpacity(bodyObj,255);
 
 // Create platform pool
 for(var i=0;i<10;i++){
     var p=lvgljs.panel(0,0,110,22);
-    lvgljs.setBgColor(p,0xCBD5E1);lvgljs.setOpacity(p,255);lvgljs.setRadius(p,4);
+    lvgljs.setBgColor(p,0x34495E);lvgljs.setOpacity(p,255);lvgljs.setRadius(p,4);
     lvgljs.setVisible(p,0);
     platforms.push({obj:p,x:0,y:0,w:110,h:22,type:2,color:"0xCBD5E1",cx:0,gotBonus:false});
 }
@@ -237,7 +237,7 @@ function initPlatforms(){
     // First platform under character
     var p0=getPoolObj();
     p0.x=CX-55;p0.y=720;p0.w=110;p0.h=22;p0.type=1;p0.color="0x64748B";p0.cx=CX;p0.gotBonus=false;p0.visible=true;
-    lvgljs.setPos(p0.obj,p0.x,p0.y);lvgljs.setSize(p0.obj,110,22);lvgljs.setBgColor(p0.obj,0x64748B);
+    lvgljs.setPos(p0.obj,p0.x,p0.y);lvgljs.setSize(p0.obj,110,22);lvgljs.setBgColor(p0.obj,0xE74C3C);
     lvgljs.setVisible(p0.obj,1);
     lastX=CX-55;lastW=110;
     for(var i=0;i<6;i++){
