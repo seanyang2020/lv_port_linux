@@ -55,6 +55,60 @@ var fc = [
 function lunarDay(y,m,d) { return ((y+m*13+d*7)%30)+1; }
 function icon(name, small) { return SKIN+"weather_"+name+(small?"_small":"")+".png"; }
 
+var WX_CACHE = __dirname + "/save/weather_cache.json";
+var wxUpdateTime = "";
+
+function loadCache() {
+    var d = lvgljs.readFile(WX_CACHE);
+    if (!d || d.length < 10) return null;
+    try { var c = JSON.parse(d); return c; } catch(e) { return null; }
+}
+function saveCache(wxData, fcData, time) {
+    var c = { wx: wxData, fc: fcData, ts: time || Date.now() };
+    lvgljs.writeFile(WX_CACHE, JSON.stringify(c));
+}
+function cacheAge(c) {
+    if (!c || !c.ts) return 9999;
+    return Math.floor((Date.now() - c.ts) / 60000); // minutes
+}
+function applyCache(c) {
+    if (!c) return;
+    wx.temp = c.wx.temp; wx.cond = c.wx.cond; wx.icon = c.wx.icon;
+    for (var i=0; i<Math.min(4,c.fc.length); i++) {
+        fc[i].i = c.fc[i].i; fc[i].hi = c.fc[i].hi; fc[i].lo = c.fc[i].lo;
+    }
+var updateLbl = lvgljs.label("", isLand?235:310, isLand?440:330, wxPan);
+lvgljs.setTextColor(updateLbl, 0x888888); lvgljs.setFont(updateLbl, M14);
+lvgljs.setOpacity(updateLbl, 180);
+
+    wxUpdateTime = new Date(c.ts).toLocaleTimeString();
+    var age = cacheAge(c);
+    lvgljs.setText(updateLbl, "Updated: " + wxUpdateTime + " (" + age + "min ago)");
+    refreshUI();
+}
+function refreshUI() {
+    lvgljs.setImage(iconImg, icon(wx.icon));
+    lvgljs.setText(tempLbl, wx.temp + "°C");
+    lvgljs.setText(condLbl, wx.cond);
+    for (var i=0; i<4; i++) {
+        lvgljs.setImage(fcIcons[i], icon(fc[i].i, true));
+    }
+}
+            }
+            wxUpdateTime = new Date().toLocaleTimeString();
+            saveCache(wx, fc, Date.now());
+            lvgljs.setText(updateLbl, "Updated: " + wxUpdateTime + " (now)");
+            refreshUI();
+            lvgljs.print("Weather fetched OK");
+        } catch(e) {
+            lvgljs.print("Weather parse error: " + e);
+            // Fall back to cache even if old
+            var c = loadCache();
+            if (c) applyCache(c);
+        }
+    });
+}
+
 // Screen
 lvgljs.screenColor(0xD2E0EB);
 
@@ -94,6 +148,15 @@ for (var j=0; j<fcLabels.length; j++) {
 // Calendar panel
 var calPan = lvgljs.panel(isLand?652:m, calY, panW, calH);
 lvgljs.setBgColor(calPan, 0xFFFFFF); lvgljs.setOpacity(calPan, 200); lvgljs.setRadius(calPan, 28);
+// Weather cache: try saved data first, then fetch
+var cache = loadCache();
+if (cache && cacheAge(cache) < 30) {
+    lvgljs.print("Using cached weather (" + cacheAge(cache) + "min old)");
+    applyCache(cache);} else {
+    lvgljs.print("Fetching weather...");
+    fetchWeather();
+}
+
 var calTitle = lvgljs.label("", isLand?199:panW/2-60, 40, calPan);
 lvgljs.setTextColor(calTitle, 0x172335); lvgljs.setFont(calTitle, font);
 var weekHdr  = lvgljs.label(D.weekHdr, isLand?40:25, 90, calPan);
