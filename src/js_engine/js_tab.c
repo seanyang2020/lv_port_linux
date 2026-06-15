@@ -72,7 +72,6 @@ static int  scan_apps(void);
 static void create_list_ui(void);
 static void list_btn_event_cb(lv_event_t * e);
 static void launch_app(int idx);
-static void return_to_list(void);
 static void back_btn_event_cb(lv_event_t * e);
 static void tick_timer_cb(lv_timer_t * t);
 

@@ -606,7 +606,7 @@ static JSValue js_style(JSContext *C, JSValue T, int N, JSValue *A) {
     else if(!strcmp(prop,"pad_all"))     lv_obj_set_style_pad_all(o,val,0);
     else if(!strcmp(prop,"shadow_w"))    lv_obj_set_style_shadow_width(o,val,0);
     else if(!strcmp(prop,"shadow_ofs"))  lv_obj_set_style_shadow_ofs_y(o,val,0);
-    else if(!strcmp(prop,"text_align"))  lv_obj_set_style_text_align(o,val,0);
+    else if(!strcmp(prop,"text_align"))  lv_obj_set_style_text_align(o,(lv_text_align_t)val,0);
     else if(!strcmp(prop,"font"))        lv_obj_set_style_text_font(o,val>20?&lv_font_montserrat_22:val>16?&lv_font_montserrat_18:&lv_font_montserrat_14,0);
     else if(!strcmp(prop,"w"))           lv_obj_set_width(o,val);
     else if(!strcmp(prop,"h"))           lv_obj_set_height(o,val);
