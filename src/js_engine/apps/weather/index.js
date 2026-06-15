@@ -72,7 +72,7 @@ var lunarLbl = lvgljs.label("", 220, 30, wxPan);
 lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, font); lvgljs.setOpacity(lunarLbl, 150);
 var timeLbl  = lvgljs.label("", 30, 86, wxPan);
 lvgljs.setTextColor(timeLbl, 0x000000); lvgljs.setFont(timeLbl, M36);
-lvgljs.image(icon(wx.icon), isLand?219:290, isLand?235:140, 160, 160, wxPan);
+var iconImg = lvgljs.image(icon(wx.icon), isLand?219:290, isLand?235:140, 160, 160, wxPan);
 lvgljs.image(SKIN+"weather_location.png", isLand?538:686, isLand?43:24, 30, 30, wxPan);
 var cityLbl  = lvgljs.label(D.city, isLand?420:540, 40, wxPan);
 lvgljs.setTextColor(cityLbl, 0x172335); lvgljs.setFont(cityLbl, font);
