@@ -152,8 +152,9 @@ lvgljs.setBgColor(calPan, 0xFFFFFF); lvgljs.setOpacity(calPan, 200); lvgljs.setR
 var cache = loadCache();
 if (cache && cacheAge(cache) < 30) {
     lvgljs.print("Using cached weather (" + cacheAge(cache) + "min old)");
-    applyCache(cache);} else {
-    lvgljs.print("Fetching weather...");
+    applyCache(cache);
+} else {
+        lvgljs.print("Fetching weather...");
     fetchWeather();
 }
 
@@ -214,7 +215,7 @@ lvgljs.setInterval(1000, updateAll);
 lvgljs.hideBackButton();   /* own close button is reliable now */
 // ---- Fetch real weather (updates every 30min) ----
 function fetchWeather(){
-    lvgljs.print("Fetching weather...");
+        lvgljs.print("Fetching weather...");
     // open-meteo: free, no key, clean JSON, Shanghai lat/lon
     lvgljs.httpGet("https://api.open-meteo.com/v1/forecast?latitude=31.23&longitude=121.47&current_weather=true", function(json){
         lvgljs.print("httpGet len="+(json?json.length:-1)+" start="+(json?json.substring(0,60):"null"));
@@ -241,6 +242,5 @@ function fetchWeather(){
         }catch(e){ lvgljs.print("JSON parse error: "+e); }
     });
 }
-fetchWeather();
 lvgljs.setInterval(1800000, fetchWeather); // refresh every 30min
 lvgljs.print("Weather ready ["+L+"]");
