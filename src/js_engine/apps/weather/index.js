@@ -138,10 +138,12 @@ function updateAll() {
     var idx=(y+m+d)%8;
     var yi=D.yi[idx], ji=D.yi[(idx+2)%8];
     lvgljs.setText(hlLabel, D.fmtHuangli(yi,ji));
+    lvgljs.setText(wxUpdateLbl, "Updated: " + agoStr(wxUpdateTs));  // live "X ago"
 }
 
 // ---- Weather cache & real API fetch ----
-var WX_CACHE = __dirname + "/save/weather_cache.json";
+var WX_CACHE = __dirname + "/weather_cache.json";
+var wxUpdateTs = 0;
 var wxUpdateLbl = lvgljs.label("", isLand?235:310, isLand?440:330, wxPan);
 lvgljs.setTextColor(wxUpdateLbl, 0x888888); lvgljs.setFont(wxUpdateLbl, 14);
 lvgljs.setOpacity(wxUpdateLbl, 180);
@@ -151,63 +153,72 @@ function loadWxCache() {
     if (!d || d.length < 10) return null;
     try { return JSON.parse(d); } catch(e) { return null; }
 }
-function saveWxCache(wxData) {
-    wxData.ts = Date.now();
-    lvgljs.writeFile(WX_CACHE, JSON.stringify(wxData));
+function saveWxCache() {
+    var c = { temp: wx.temp, cond: wx.cond, icon: wx.icon,
+              fc: fc, ts: wxUpdateTs, city: wx.city };
+    lvgljs.writeFile(WX_CACHE, JSON.stringify(c));
 }
-function cacheAgeMin(c) { return c && c.ts ? Math.floor((Date.now() - c.ts) / 60000) : 9999; }
+
+function agoStr(ts) {
+    if (!ts) return "";
+    var s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return "just now";
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + "min ago";
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + "h " + (m % 60) + "min ago";
+    var d = Math.floor(h / 24);
+    return d + "d ago";
+}
 
 function refreshWeatherUI() {
-    lvgljs.setImage(iconImg, icon(wx.icon));
     lvgljs.setText(tempLbl, wx.temp + "°C");
     lvgljs.setText(condLbl, wx.cond);
+    lvgljs.setImage(iconImg, icon(wx.icon));
     for (var i = 0; i < 4; i++) lvgljs.setImage(fcIcons[i], icon(fc[i].i, true));
+    lvgljs.setText(wxUpdateLbl, "Updated: " + agoStr(wxUpdateTs));
 }
 
 function fetchWeather() {
     lvgljs.httpGet("https://api.open-meteo.com/v1/forecast?latitude=31.23&longitude=121.47&current_weather=true", function(json) {
-        lvgljs.print("httpGet len=" + (json ? json.length : -1));
         try {
             var data = JSON.parse(json.trim());
             var cw = data.current_weather;
             wx.temp = cw.temperature;
             var code = cw.weathercode;
-            if (code === 0)           { wx.cond = "Clear";   wx.icon = "sunny"; }
-            else if (code <= 3)        { wx.cond = "Cloudy";  wx.icon = "cloudy"; }
-            else if (code <= 48)       { wx.cond = "Fog";     wx.icon = "cloudy"; }
-            else if (code <= 67)       { wx.cond = "Rain";    wx.icon = "rainy"; }
-            else if (code <= 77)       { wx.cond = "Snow";    wx.icon = "rainy"; }
-            else if (code <= 82)       { wx.cond = "Shower";  wx.icon = "rainy"; }
-            else                       { wx.cond = "Storm";   wx.icon = "rainy"; }
-            saveWxCache({ temp: wx.temp, cond: wx.cond, icon: wx.icon });
-            lvgljs.setText(wxUpdateLbl, "Updated: just now");
+            if (code === 0)          { wx.cond = "Clear";   wx.icon = "sunny"; }
+            else if (code <= 3)      { wx.cond = "Cloudy";  wx.icon = "cloudy"; }
+            else if (code <= 48)     { wx.cond = "Fog";     wx.icon = "cloudy"; }
+            else if (code <= 67)     { wx.cond = "Rain";    wx.icon = "rainy"; }
+            else if (code <= 77)     { wx.cond = "Snow";    wx.icon = "rainy"; }
+            else if (code <= 82)     { wx.cond = "Shower";  wx.icon = "rainy"; }
+            else                     { wx.cond = "Storm";   wx.icon = "rainy"; }
+            wxUpdateTs = Date.now();
+            saveWxCache();
             refreshWeatherUI();
             lvgljs.print("Weather: " + wx.temp + "C " + wx.cond);
         } catch(e) {
             lvgljs.print("Weather parse error: " + e);
             var c = loadWxCache();
-            if (c) { // fall back to cache regardless of age
-                wx.temp = c.temp; wx.cond = c.cond; wx.icon = c.icon;
-                refreshWeatherUI();
-                var age = cacheAgeMin(c);
-                lvgljs.setText(wxUpdateLbl, "Updated: " + age + "min ago (cached)");
-            }
+            if (c) { wx.temp = c.temp; wx.cond = c.cond; wx.icon = c.icon; wxUpdateTs = c.ts; refreshWeatherUI(); }
         }
     });
 }
 
-// Init: use cache if fresh, otherwise fetch
+// Init
 var saved = loadWxCache();
-if (saved && cacheAgeMin(saved) < 30) {
-    wx.temp = saved.temp; wx.cond = saved.cond; wx.icon = saved.icon;
+if (saved && saved.ts && (Date.now() - saved.ts) < 1800000) {
+    wx.temp = saved.temp; wx.cond = saved.cond; wx.icon = saved.icon; wxUpdateTs = saved.ts;
+    if (saved.fc) for (var i = 0; i < Math.min(4, saved.fc.length); i++) {
+        fc[i].i = saved.fc[i].i; fc[i].hi = saved.fc[i].hi; fc[i].lo = saved.fc[i].lo;
+    }
     refreshWeatherUI();
-    lvgljs.setText(wxUpdateLbl, "Updated: " + cacheAgeMin(saved) + "min ago");
 } else {
     fetchWeather();
 }
-// Refresh every 30 minutes
 lvgljs.setInterval(1800000, fetchWeather);
 updateAll();
 lvgljs.setInterval(1000, updateAll);
+// "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
 lvgljs.print("Weather ready [" + L + "]");
