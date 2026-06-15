@@ -34,9 +34,7 @@
 #include "fh_vgs2_mpi.h"
 #include "fh_vgs2_mpipara.h"
 #include "fb_drv_ioc.h"
-#include "sample_comm.h"
 
-#include "xosfb.h"
 #include "xosfb_v2.h"
 
 /*********************
@@ -71,6 +69,9 @@ struct xosfb_ctx {
     uint32_t caps;              /* Hardware capability flags */
     int      tde_opened;        /* TDE2 opened flag */
     int      vgs_opened;        /* VGS2 initialized flag */
+    int      sys_owned;         /* 1 = we initialized MPP, must tear down */
+    int      vo_owned;          /* 1 = we initialized VO, must disable */
+    int      fb_opened;         /* 1 = we opened /dev/fb0 */
     unsigned long fb_phy;       /* Cached FB physical address */
 
     /* DMA block tracking */
@@ -82,10 +83,10 @@ struct xosfb_ctx {
  *  STATIC PROTOTYPES
  **********************/
 
-static int  sys_init_v2(void);
+static int  sys_init_v2(xosfb_ctx_t *ctx);
 static void sys_exit_v2(void);
-static int  vo_init_v2(int width, int height);
-static void vo_exit_v2(void);
+static int  vo_init_v2(xosfb_ctx_t *ctx, int width, int height);
+static void vo_exit_v2(xosfb_ctx_t *ctx);
 static int  tde_init(xosfb_ctx_t *ctx);
 static void tde_exit(xosfb_ctx_t *ctx);
 static int  vgs_init(xosfb_ctx_t *ctx);
@@ -123,26 +124,32 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
     ctx->height = height;
     ctx->caps = 0;
 
-    /* Step 1: MPP System Init (VB pools + SYS) */
-    ret = sys_init_v2();
+    /* Step 1: MPP System Init (VB pools + SYS).
+     * If the system is already initialized (e.g. by a boot framework),
+     * tolerate the error and continue. */
+    ret = sys_init_v2(ctx);
     if (ret != 0) {
-        fprintf(stderr, "xosfb_v2_init: sys_init_v2 failed (%d)\n", ret);
-        goto fail_ctx;
+        fprintf(stderr, "xosfb_v2_init: sys_init_v2 failed (%d), "
+                "assuming MPP already initialized\n", ret);
+        /* NOT fatal — continue with FB / TDE2 / VGS2 */
     }
 
-    /* Step 2: VO Device Init */
-    ret = vo_init_v2(width, height);
+    /* Step 2: VO Device Init.
+     * Same tolerance: VO may already be configured by an external launcher. */
+    ret = vo_init_v2(ctx, width, height);
     if (ret != 0) {
-        fprintf(stderr, "xosfb_v2_init: vo_init_v2 failed (%d)\n", ret);
-        goto fail_sys;
+        fprintf(stderr, "xosfb_v2_init: vo_init_v2 failed (%d), "
+                "assuming VO already configured\n", ret);
+        /* NOT fatal */
     }
 
     /* Step 3: FB Device Init (same as v1) */
     ctx->fd = open(XOSFB_DEV_FB0, O_RDWR);
     if (ctx->fd < 0) {
         perror("xosfb_v2_init: open " XOSFB_DEV_FB0);
-        goto fail_vo;
+        goto fail_ctx;
     }
+    ctx->fb_opened = 1;
     printf("xosfb_v2: opened %s, fd=%d, %dx%d\n", XOSFB_DEV_FB0, ctx->fd, width, height);
 
     /* Hide during config */
@@ -224,7 +231,7 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
                 "fill/copy/blend unavailable\n", ret);
     }
 
-    /* Step 5: VGS2 Init (scale/convert/rotate) */
+    /* Step 5: VGS2 Init (scale/convert/rotate — optional) */
     ret = vgs_init(ctx);
     if (ret == 0) {
         ctx->caps |= (XOSFB_V2_CAP_SCALE | XOSFB_V2_CAP_CONVERT | XOSFB_V2_CAP_ROTATE);
@@ -242,14 +249,13 @@ fail_mmap:
     munmap(ctx->fbp, ctx->screensize);
     ctx->fbp = NULL;
 fail_fb:
-    close(ctx->fd);
-    ctx->fd = -1;
-fail_vo:
-    vo_exit_v2();
-fail_sys:
-    sys_exit_v2();
+    if (ctx->fb_opened) {
+        close(ctx->fd);
+        ctx->fd = -1;
+        ctx->fb_opened = 0;
+    }
 fail_ctx:
-    free(ctx);
+    xosfb_v2_exit(ctx);
     return NULL;
 }
 
@@ -270,8 +276,8 @@ void xosfb_v2_exit(xosfb_ctx_t *ctx)
     /* Step 4 reversed: TDE2 */
     tde_exit(ctx);
 
-    /* Step 3 reversed: FB */
-    if (ctx->fd >= 0) {
+    /* Step 3 reversed: FB — only if we opened it */
+    if (ctx->fb_opened && ctx->fd >= 0) {
         int bShow = 0;
         ioctl(ctx->fd, FBIOPUT_SHOW_FYFB, &bShow);
     }
@@ -279,16 +285,21 @@ void xosfb_v2_exit(xosfb_ctx_t *ctx)
         munmap(ctx->fbp, ctx->screensize);
         ctx->fbp = NULL;
     }
-    if (ctx->fd >= 0) {
+    if (ctx->fb_opened && ctx->fd >= 0) {
         close(ctx->fd);
         ctx->fd = -1;
+        ctx->fb_opened = 0;
     }
 
-    /* Step 2 reversed: VO */
-    vo_exit_v2();
+    /* Step 2 reversed: VO — only if we enabled it */
+    if (ctx->vo_owned) {
+        vo_exit_v2(ctx);
+    }
 
-    /* Step 1 reversed: SYS */
-    sys_exit_v2();
+    /* Step 1 reversed: SYS — only if we initialized it */
+    if (ctx->sys_owned) {
+        sys_exit_v2();
+    }
 
     printf("xosfb_v2: exit complete\n");
     free(ctx);
@@ -569,22 +580,38 @@ int xosfb_v2_rotate_blit(xosfb_ctx_t *ctx,
 int xosfb_v2_alloc_dma(xosfb_ctx_t *ctx, unsigned int size, xosfb_v2_dma_buf_t *buf)
 {
     VB_POOL pool;
+    VB_BLK  blk;
 
     if (!ctx || !buf || size == 0) return -EINVAL;
 
     memset(buf, 0, sizeof(*buf));
 
-    /* Allocate from VB pools.  VB_INVALID_POOLID = auto-select pool. */
-    VB_BLK blk = FH_VB_GetBlock(VB_INVALID_POOLID, size, NULL);
+    /* Try existing pools first (auto-select via VB_INVALID_POOLID) */
+    blk = FH_VB_GetBlock(VB_INVALID_POOLID, size, NULL);
     if (blk == 0) {
-        fprintf(stderr, "xosfb_v2_alloc_dma: FH_VB_GetBlock(%u) failed\n", size);
-        return -ENOMEM;
+        /* Existing pools can't satisfy this size — create a dedicated pool.
+         * This happens when MPP was pre-initialized with small-block pools. */
+        pool = FH_VB_CreatePool(size, 1, "xosfb_v2_dma");
+        if (pool == VB_INVALID_POOLID) {
+            fprintf(stderr, "xosfb_v2_alloc_dma: cannot allocate %u bytes "
+                    "(existing pools too small, create pool failed)\n", size);
+            return -ENOMEM;
+        }
+        printf("xosfb_v2: created DMA pool id=%d size=%u\n", pool, size);
+
+        /* Retry allocation from the new pool */
+        blk = FH_VB_GetBlock(pool, size, NULL);
+        if (blk == 0) {
+            fprintf(stderr, "xosfb_v2_alloc_dma: GetBlock from new pool failed\n");
+            FH_VB_DestroyPool(pool);
+            return -ENOMEM;
+        }
     }
 
     buf->phy_addr  = FH_VB_Handle2PhysAddr(blk);
     buf->size      = size;
 
-    /* Get virtual address via pool ID + physical address */
+    /* Get virtual address */
     pool = FH_VB_Handle2PoolId(blk);
     FH_VB_GetBlkVirAddr(pool, buf->phy_addr, (FH_VOID **)&buf->virt_addr);
 
@@ -633,7 +660,7 @@ void xosfb_v2_free_dma(xosfb_ctx_t *ctx, xosfb_v2_dma_buf_t *buf)
  *   STATIC FUNCTIONS — System Init
  * ================================================================ */
 
-static int sys_init_v2(void)
+static int sys_init_v2(xosfb_ctx_t *ctx)
 {
     int ret;
     VB_CONF_S vb_conf;
@@ -647,8 +674,9 @@ static int sys_init_v2(void)
 
     ret = FH_VB_SetConf(&vb_conf);
     if (ret != FH_SUCCESS) {
-        fprintf(stderr, "sys_init_v2: FH_VB_SetConf failed (%d)\n", ret);
-        return -1;
+        fprintf(stderr, "xosfb_v2: FH_VB_SetConf failed (%d), "
+                "MPP may already be initialized — skipping\n", ret);
+        return -1;  /* caller tolerates this */
     }
 
     ret = FH_VB_Init();
@@ -657,13 +685,13 @@ static int sys_init_v2(void)
         return -1;
     }
 
-    /* SYS Init — no explicit SetConf needed; alignment is auto-handled */
     ret = FH_SYS_Init();
     if (ret != FH_SUCCESS) {
         fprintf(stderr, "sys_init_v2: FH_SYS_Init failed (%d)\n", ret);
         return -1;
     }
 
+    ctx->sys_owned = 1;
     printf("xosfb_v2: MPP system initialized\n");
     return 0;
 }
@@ -689,7 +717,7 @@ static void sys_exit_v2(void)
  *   STATIC FUNCTIONS — VO Init
  * ================================================================ */
 
-static int vo_init_v2(int width, int height)
+static int vo_init_v2(xosfb_ctx_t *ctx, int width, int height)
 {
     VO_PUB_ATTR_S attr;
     VO_DEV dev = XOSFB_VO_DEV_DHD0;
@@ -720,8 +748,9 @@ static int vo_init_v2(int width, int height)
 
     ret = FH_VO_SetPubAttr(dev, &attr);
     if (ret != FH_SUCCESS) {
-        fprintf(stderr, "xosfb_v2: FH_VO_SetPubAttr failed (%d)\n", ret);
-        return -1;
+        fprintf(stderr, "xosfb_v2: FH_VO_SetPubAttr failed (%d), "
+                "VO may already be configured — skipping\n", ret);
+        return -1;  /* caller tolerates this */
     }
 
     ret = FH_VO_Enable(dev);
@@ -730,15 +759,19 @@ static int vo_init_v2(int width, int height)
         return -1;
     }
 
+    ctx->vo_owned = 1;
     return 0;
 }
 
-static void vo_exit_v2(void)
+static void vo_exit_v2(xosfb_ctx_t *ctx)
 {
+    if (!ctx->vo_owned) return;
+
     int ret = FH_VO_Disable(XOSFB_VO_DEV_DHD0);
     if (ret != FH_SUCCESS) {
         fprintf(stderr, "xosfb_v2: FH_VO_Disable failed (%d)\n", ret);
     }
+    ctx->vo_owned = 0;
     printf("xosfb_v2: VO exited\n");
 }
 
@@ -847,5 +880,63 @@ static int vgs_pixel_fmt(xosfb_pixel_format_t fmt)
     case XOSFB_FMT_ARGB1555:  return 5;  /* FYFB_FMT_ARGB1555 */
     case XOSFB_FMT_ARGB0565:  return 0;  /* FYFB_FMT_RGB565 */
     default:                  return 6;
+    }
+}
+
+/* ================================================================
+ *  v1 Compatibility Functions (inlined to avoid xosfb.o dependency)
+ *
+ *  These are the public v1 API from xosfb.h.  They are implemented
+ *  here so libxosfb_v2.a is self-contained — no dependency on
+ *  xosfb.o (which would pull in SAMPLE_COMM_VO_StartDev).
+ * ================================================================ */
+
+void *xosfb_get_fb_ptr(xosfb_ctx_t *ctx)
+{
+    return ctx ? ctx->fbp : NULL;
+}
+
+int xosfb_get_line_length(xosfb_ctx_t *ctx)
+{
+    return ctx ? ctx->line_length : 0;
+}
+
+void xosfb_get_resolution(xosfb_ctx_t *ctx, int *w, int *h)
+{
+    if (ctx) {
+        *w = ctx->width;
+        *h = ctx->height;
+    } else {
+        *w = *h = 0;
+    }
+}
+
+int xosfb_get_bpp(xosfb_ctx_t *ctx)
+{
+    return ctx ? ctx->bpp : 0;
+}
+
+xosfb_pixel_format_t xosfb_get_pixel_format(xosfb_ctx_t *ctx)
+{
+    return ctx ? ctx->fmt : XOSFB_FMT_ARGB8888;
+}
+
+void xosfb_pan_display(xosfb_ctx_t *ctx)
+{
+    if (!ctx || ctx->fd < 0) return;
+
+    ctx->var.yoffset = 0;
+    if (ioctl(ctx->fd, FBIOPAN_DISPLAY, &ctx->var) < 0) {
+        perror("xosfb_pan_display: FBIOPAN_DISPLAY");
+    }
+}
+
+void xosfb_show(xosfb_ctx_t *ctx, int enable)
+{
+    if (!ctx || ctx->fd < 0) return;
+
+    int bShow = enable ? 1 : 0;
+    if (ioctl(ctx->fd, FBIOPUT_SHOW_FYFB, &bShow) < 0) {
+        perror("xosfb_show: FBIOPUT_SHOW_FYFB");
     }
 }

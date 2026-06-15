@@ -217,7 +217,147 @@ v2 会自动容错——`FH_VB_SetConf` 或 `FH_VO_SetPubAttr` 失败时仅打�
 
 ---
 
-## 6. LVGL 完整集成模板
+## 6. VGS2 适配策略 (关键)
+
+VGS2 是可选硬件模块，如果驱动未加载，`xosfb_v2_init` 会打印警告并继续运行，caps 不包含 SCALE/CONVERT/ROTATE。
+
+### 如何判断 VGS2 是否可用
+
+```c
+uint32_t caps = xosfb_v2_get_caps(ctx);
+int has_vgs2 = (caps & XOSFB_V2_CAP_CONVERT) ? 1 : 0;
+```
+
+### 两条适配路径
+
+```
+caps & XOSFB_V2_CAP_CONVERT?
+│
+├─ YES (VGS2 可用):
+│   FB 格式可以 ≠ LVGL 格式 (如 FB=ARGB1555, LVGL=ARGB8888)
+│   LVGL buffer 必须用 xosfb_v2_alloc_dma() (DMA 内存)
+│   flush callback 用 xosfb_v2_blit() 做格式转换
+│   LVGL mode: LV_DISPLAY_RENDER_MODE_FULL
+│
+└─ NO (VGS2 不可用):
+    FB 格式 必须 == LVGL 格式 (必须相同!)
+    LVGL buffer 用 xosfb_get_fb_ptr() (直接渲染到 FB)
+    flush callback 不需要做任何事 (LVGL 已直接写 FB)
+    LVGL mode: LV_DISPLAY_RENDER_MODE_DIRECT
+```
+
+### 适配代码模板
+
+```c
+static int has_vgs2;  /* 全局标志 */
+
+int setup_lvgl(void)
+{
+    g_ctx = xosfb_v2_init(LCD_W, LCD_H, FB_FMT);
+    if (!g_ctx) return -1;
+
+    has_vgs2 = (xosfb_v2_get_caps(g_ctx) & XOSFB_V2_CAP_CONVERT) ? 1 : 0;
+    printf("VGS2: %s\n", has_vgs2 ? "available" : "unavailable — LVGL must match FB format");
+
+    lv_init();
+    lv_display_t *disp = lv_display_create(LCD_W, LCD_H);
+
+    if (has_vgs2) {
+        /* VGS2 可用: LVGL 用 ARGB8888 (最佳画质), FB 用 ARGB1555 (省带宽) */
+        xosfb_v2_alloc_dma(g_ctx, LCD_W * LCD_H * 4, &g_lvgl_dma);
+        lv_display_set_buffers(disp, g_lvgl_dma.virt_addr, NULL,
+                               g_lvgl_dma.size, LV_DISPLAY_RENDER_MODE_FULL);
+    } else {
+        /* VGS2 不可用: LVGL 直接渲染到 FB, 格式必须与 FB 一致 */
+        // 确保 LV_COLOR_DEPTH 与 FB 匹配:
+        //   FB=ARGB8888 → #define LV_COLOR_DEPTH 32
+        //   FB=ARGB1555 → #define LV_COLOR_DEPTH 16
+        void *fbp = xosfb_get_fb_ptr(g_ctx);
+        size_t fb_size = LCD_W * LCD_H * (xosfb_get_bpp(g_ctx) / 8);
+        lv_display_set_buffers(disp, fbp, NULL, fb_size,
+                               LV_DISPLAY_RENDER_MODE_DIRECT);
+    }
+
+    lv_display_set_flush_cb(disp, flush_cb);
+    return 0;
+}
+
+static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
+{
+    if (has_vgs2) {
+        /* VGS2 路径: DMA buffer → VGS2 格式转换 → FB */
+        int w = lv_area_get_width(area);
+        int h = lv_area_get_height(area);
+        xosfb_v2_blit_desc_t d = {
+            .src_buf = px, .src_w = w, .src_h = h,
+            .src_stride = LCD_W, .src_fmt = XOSFB_FMT_ARGB8888,
+            .dst_x = area->x1, .dst_y = area->y1,
+            .dst_w = w, .dst_h = h,
+        };
+        xosfb_v2_blit(g_ctx, &d);
+    }
+    /* 无 VGS2 路径: LVGL 已直接写入 FB (DIRECT 模式), 不需要额外操作 */
+
+    if (lv_display_flush_is_last(disp))
+        xosfb_pan_display(g_ctx);
+    lv_display_flush_ready(disp);
+}
+```
+
+### 关键约束
+
+| 条件 | FB 格式 | LVGL 格式 | Buffer | flush 操作 |
+|------|---------|----------|--------|-----------|
+| VGS2 可用 | 任意 | 任意 (可不同) | DMA (`alloc_dma`) | `xosfb_v2_blit()` |
+| VGS2 不可用 | X | **必须 = FB 格式** | FB 直接 (`get_fb_ptr`) | 无操作 |
+
+**如果 VGS2 不可用且 FB≠LVGL 格式 → 画面花屏或黑屏。** 必须确保 `LV_COLOR_DEPTH` 与 `xosfb_get_bpp()` 一致。
+
+---
+
+## 7. LVGL 完整集成模板 (无 VGS2 简化版)
+
+当 VGS2 不可用时，使用此简化模板:
+
+```c
+#include "xosfb_v2.h"
+#include "lvgl/lvgl.h"
+
+static xosfb_ctx_t *g_ctx;
+
+/* FB 用 ARGB8888, LVGL 也必须用 ARGB8888 (格式一致, 无需 VGS2) */
+#define LCD_W  800
+#define LCD_H  480
+/* 确保 lv_conf.h: #define LV_COLOR_DEPTH 32 */
+
+static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
+{
+    /* DIRECT 模式: LVGL 已渲染到 FB, 只需 pan_display */
+    if (lv_display_flush_is_last(disp))
+        xosfb_pan_display(g_ctx);
+    lv_display_flush_ready(disp);
+}
+
+int setup_lvgl(void)
+{
+    g_ctx = xosfb_v2_init(LCD_W, LCD_H, XOSFB_FMT_ARGB8888);
+    if (!g_ctx) return -1;
+
+    lv_init();
+    lv_display_t *disp = lv_display_create(LCD_W, LCD_H);
+    void *fbp = xosfb_get_fb_ptr(g_ctx);
+    lv_display_set_buffers(disp, fbp, NULL, LCD_W * LCD_H * 4,
+                           LV_DISPLAY_RENDER_MODE_DIRECT);
+    lv_display_set_flush_cb(disp, flush_cb);
+    return 0;
+}
+
+void teardown_lvgl(void) { xosfb_v2_exit(g_ctx); }
+```
+
+---
+
+## 8. 故障排查表
 
 ```c
 #include "xosfb_v2.h"
