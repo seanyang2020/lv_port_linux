@@ -28,6 +28,7 @@
 #include "../simulator_util.h"
 #include "../backends.h"
 #include "xosfb.h"
+#include "xosfb_v2.h"
 
 #if LV_USE_LINUX_FBDEV
 
@@ -40,12 +41,14 @@
  **********************/
 
 typedef struct {
-    xosfb_ctx_t *xosfb;        /* xosfb library context */
-    uint8_t *draw_buf_1;       /* LVGL draw buffer 1 */
-    uint8_t *draw_buf_2;       /* LVGL draw buffer 2 (optional) */
-    int px_size;               /* bytes per pixel */
-    lv_color_format_t lvgl_fmt;/* LVGL color format */
-    bool needs_alpha_convert;  /* true if ARGB1555 needs bit15 set */
+    xosfb_ctx_t *xosfb;           /* xosfb library context */
+    uint8_t     *draw_buf_1;      /* LVGL draw buffer 1 (DMA or malloc) */
+    uint8_t     *draw_buf_2;      /* LVGL draw buffer 2 (optional) */
+    xosfb_v2_dma_buf_t dma_buf;   /* DMA buffer handle (v2 only) */
+    bool         use_v2;          /* true if v2 hardware available */
+    int          px_size;         /* bytes per pixel */
+    lv_color_format_t lvgl_fmt;   /* LVGL color format */
+    bool         needs_alpha_convert; /* true if ARGB1555 needs bit15 set */
 } xosfb_drv_t;
 
 /**********************
@@ -136,13 +139,16 @@ static lv_display_t *init_xosfb(void)
     LV_ASSERT_MALLOC(drv);
     if (!drv) return NULL;
 
-    /* Initialize xosfb library (SYS + VO + FB + mmap) */
-    drv->xosfb = xosfb_init(width, height, fmt);
+    /* Initialize xosfb library (v2 hardware accelerated if available) */
+    drv->xosfb = xosfb_v2_init(width, height, fmt);
+    drv->use_v2 = (drv->xosfb != NULL);
     if (!drv->xosfb) {
-        LV_LOG_ERROR("xosfb_init failed");
+        LV_LOG_ERROR("xosfb_v2_init failed");
         lv_free(drv);
         return NULL;
     }
+    LV_LOG_INFO("xosfb v%d mode: %s", drv->use_v2 ? 2 : 1,
+                drv->use_v2 ? "TDE2+VGS2 accelerated" : "CPU memcpy");
 
     /* Get actual resolution from driver */
     int actual_w, actual_h;
@@ -176,7 +182,8 @@ static lv_display_t *init_xosfb(void)
     lv_display_t *disp = lv_display_create(actual_w, actual_h);
     if (!disp) {
         LV_LOG_ERROR("lv_display_create failed");
-        xosfb_exit(drv->xosfb);
+        if (drv->dma_buf.virt_addr) xosfb_v2_free_dma(drv->xosfb, &drv->dma_buf);
+        xosfb_v2_exit(drv->xosfb);
         lv_free(drv);
         return NULL;
     }
@@ -186,12 +193,17 @@ static lv_display_t *init_xosfb(void)
     lv_display_set_flush_cb(disp, flush_cb);
     lv_display_add_event_cb(disp, del_event_cb, LV_EVENT_DELETE, NULL);
 
-    /* Allocate draw buffers (full screen, single or double) */
+    /* Allocate draw buffer — DMA (v2) for VGS2 hardware blit, malloc fallback */
     uint32_t draw_buf_size = actual_w * actual_h * drv->px_size;
-    drv->draw_buf_1 = lv_malloc(draw_buf_size);
-    LV_ASSERT_MALLOC(drv->draw_buf_1);
-
-    /* Single buffer for simplicity; FB hardware handles double-buffering */
+    if (drv->use_v2 && xosfb_v2_alloc_dma(drv->xosfb, draw_buf_size, &drv->dma_buf) == 0) {
+        drv->draw_buf_1 = drv->dma_buf.virt_addr;
+        LV_LOG_INFO("LVGL DMA buffer: virt=%p phy=0x%lx size=%u",
+                    drv->dma_buf.virt_addr, drv->dma_buf.phy_addr, draw_buf_size);
+    } else {
+        drv->draw_buf_1 = lv_malloc(draw_buf_size);
+        LV_ASSERT_MALLOC(drv->draw_buf_1);
+        drv->use_v2 = false; /* can't use VGS2 blit without DMA */
+    }
     drv->draw_buf_2 = NULL;
 
     lv_display_set_buffers(disp, drv->draw_buf_1, drv->draw_buf_2,
@@ -223,35 +235,32 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p
         return;
     }
 
-    uint8_t *fb = xosfb_get_fb_ptr(drv->xosfb);
-    int fb_stride = xosfb_get_line_length(drv->xosfb);
     int32_t w = lv_area_get_width(area);
     int32_t h = lv_area_get_height(area);
     int hor_res = lv_display_get_horizontal_resolution(disp);
 
-    if (!fb) {
-        lv_display_flush_ready(disp);
-        return;
-    }
-
-    /*
-     * In FULL mode, color_p is the full-screen draw buffer.
-     * Stride in the draw buffer = hor_res * px_size.
-     * Stride in fb = fb_stride (line_length from hardware).
-     */
-    int src_stride = hor_res * drv->px_size;
-
-    /* Copy rows from the LVGL draw buffer to mmap'd framebuffer */
-    if (fb_stride == src_stride && area->x1 == 0) {
-        /* Fast path: contiguous memcpy when strides match */
-        lv_memcpy(fb, &color_p[area->y1 * src_stride], h * src_stride);
+    if (drv->use_v2 && drv->dma_buf.virt_addr) {
+        /* VGS2 hardware blit (CSC + DMA, ~2ms) */
+        xosfb_v2_blit_desc_t desc = {
+            .src_buf = color_p, .src_w = w, .src_h = h,
+            .src_stride = hor_res, .src_fmt = XOSFB_FMT_ARGB8888,
+            .dst_x = area->x1, .dst_y = area->y1, .dst_w = w, .dst_h = h,
+        };
+        xosfb_v2_blit(drv->xosfb, &desc);
     } else {
-        /* Row-by-row copy for stride mismatch */
-        for (int32_t y = 0; y < h; y++) {
-            uint32_t fb_off = (area->y1 + y) * fb_stride + area->x1 * drv->px_size;
-            uint32_t src_off = (area->y1 + y) * src_stride + area->x1 * drv->px_size;
-            lv_memcpy(&fb[fb_off], &color_p[src_off], w * drv->px_size);
-        }
+        /* CPU memcpy fallback */
+        uint8_t *fb = xosfb_get_fb_ptr(drv->xosfb);
+        int fb_stride = xosfb_get_line_length(drv->xosfb);
+        int src_stride = hor_res * drv->px_size;
+        if (!fb) { lv_display_flush_ready(disp); return; }
+        if (fb_stride == src_stride && area->x1 == 0)
+            lv_memcpy(fb, &color_p[area->y1 * src_stride], h * src_stride);
+        else
+            for (int32_t y = 0; y < h; y++) {
+                uint32_t fo = (area->y1 + y) * fb_stride + area->x1 * drv->px_size;
+                uint32_t so = (area->y1 + y) * src_stride + area->x1 * drv->px_size;
+                lv_memcpy(&fb[fo], &color_p[so], w * drv->px_size);
+            }
     }
 
     /* Commit to display — required for qm10xd hardware */
@@ -273,10 +282,12 @@ static void del_event_cb(lv_event_t *e)
     if (!drv) return;
 
     if (drv->xosfb) {
-        xosfb_exit(drv->xosfb);
+        if (drv->dma_buf.virt_addr) xosfb_v2_free_dma(drv->xosfb, &drv->dma_buf);
+        xosfb_v2_exit(drv->xosfb);
         drv->xosfb = NULL;
     }
-    if (drv->draw_buf_1) lv_free(drv->draw_buf_1);
+    /* DMA buffer freed above, malloc buffer freed here */
+    if (!drv->dma_buf.virt_addr && drv->draw_buf_1) lv_free(drv->draw_buf_1);
     if (drv->draw_buf_2) lv_free(drv->draw_buf_2);
 
     lv_free(drv);
