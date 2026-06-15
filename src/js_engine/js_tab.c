@@ -155,11 +155,18 @@ static void create_list_ui(void)
     g_ctx.list_obj = lv_list_create(parent);
     lv_obj_set_flex_grow(g_ctx.list_obj, 1);
     lv_obj_set_width(g_ctx.list_obj, lv_pct(100));
+    lv_obj_set_style_pad_row(g_ctx.list_obj, 12, 0);  /* spacing between items */
 
     for (int i = 0; i < g_ctx.app_count; i++) {
         lv_obj_t * btn = lv_list_add_btn(g_ctx.list_obj,
                                          NULL,    /* no icon */
                                          g_ctx.apps[i].name);
+        /* Increase touch target: taller button + bigger font */
+        lv_obj_set_style_min_height(btn, 56, 0);
+        lv_obj_set_style_pad_ver(btn, 14, 0);
+        lv_obj_t * label = lv_obj_get_child(btn, 0);
+        if (label) lv_obj_set_style_text_font(label, &lv_font_montserrat_22, 0);
+
         lv_obj_add_event_cb(btn, list_btn_event_cb,
                             LV_EVENT_CLICKED, (void *)(intptr_t)i);
     }
