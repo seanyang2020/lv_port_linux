@@ -31,8 +31,7 @@
 #include "fh_vo_mpi.h"
 #include "fh_tde_mpi.h"
 #include "fh_tde_mpipara.h"
-#include "fh_vgs2_mpi.h"
-#include "fh_vgs2_mpipara.h"
+#include "fh_vgs_mpi.h"
 #include "fb_drv_ioc.h"
 
 #include "xosfb_v2.h"
@@ -231,12 +230,12 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
                 "fill/copy/blend unavailable\n", ret);
     }
 
-    /* Step 5: VGS2 Init (scale/convert/rotate — optional) */
+    /* Step 5: VGS Init (scale/convert/rotate — optional) */
     ret = vgs_init(ctx);
     if (ret == 0) {
         ctx->caps |= (XOSFB_V2_CAP_SCALE | XOSFB_V2_CAP_CONVERT | XOSFB_V2_CAP_ROTATE);
     } else {
-        fprintf(stderr, "xosfb_v2_init: VGS2 init failed (%d), "
+        fprintf(stderr, "xosfb_v2_init: VGS init failed (%d), "
                 "scale/convert/rotate unavailable\n", ret);
     }
 
@@ -444,7 +443,7 @@ int xosfb_v2_copy_rect(xosfb_ctx_t *ctx,
 }
 
 /* ================================================================
- *  VGS2: Hardware Blit (format convert + scale + position)
+ *  VGS v1: Hardware Blit (format convert + scale + position)
  * ================================================================ */
 
 int xosfb_v2_blit(xosfb_ctx_t *ctx, const xosfb_v2_blit_desc_t *desc)
@@ -454,57 +453,59 @@ int xosfb_v2_blit(xosfb_ctx_t *ctx, const xosfb_v2_blit_desc_t *desc)
     if (desc->src_w <= 0 || desc->src_h <= 0) return -EINVAL;
     if (desc->dst_w <= 0 || desc->dst_h <= 0) return -EINVAL;
 
-    VGS2_HANDLE handle;
-    VGS_V2_CVT_CTRL ctrl;
+    VGS_HANDLE handle;
+    VIDEO_FRAME_S src_frame, dst_frame;
     int ret;
 
-    memset(&ctrl, 0, sizeof(ctrl));
+    /* Source frame */
+    memset(&src_frame, 0, sizeof(src_frame));
+    src_frame.u32Width      = desc->src_w;
+    src_frame.u32Height     = desc->src_h;
+    src_frame.u32Field      = VIDEO_FIELD_FRAME;
+    src_frame.enPixelFormat = vgs_pixel_fmt(desc->src_fmt);
+    src_frame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    src_frame.enCompressMode = COMPRESS_MODE_NONE;
+    src_frame.pVirAddr[0]   = (FH_VOID *)desc->src_buf;
+    src_frame.u32Stride[0]  = desc->src_stride *
+        (desc->src_fmt == XOSFB_FMT_ARGB8888 ? 4 : 2);
 
-    /* Source: DMA buffer.
-     * FH_MEM_INFO.base  = physical address (FH_PHYADDR)
-     * FH_MEM_INFO.vbase = virtual address (FH_VOID *)
-     * The caller must pass the dma_buf.phy_addr for base,
-     * and dma_buf.virt_addr for vbase.
-     * For now we set base=0 (VGS2 can use vbase alone on some paths)
-     * and pass the virtual address. */
-    ctrl.src_data.data_yaddr.base  = 0;
-    ctrl.src_data.data_yaddr.vbase = (FH_VOID *)desc->src_buf;
-    ctrl.src_data.data_yaddr.size  = (FH_UINT32)(desc->src_h * desc->src_stride *
-        (desc->src_fmt == XOSFB_FMT_ARGB8888 ? 4 : 2));
-    ctrl.src_data.data_caddr.base  = 0;
-    ctrl.src_data.data_caddr.size  = 0;
-    ctrl.src_data.image_size.u32Width  = desc->src_w;
-    ctrl.src_data.image_size.u32Height = desc->src_h;
-    ctrl.src_data.start.u32X = 0;
-    ctrl.src_data.start.u32Y = 0;
+    /* Destination frame (FB) */
+    memset(&dst_frame, 0, sizeof(dst_frame));
+    dst_frame.u32Width      = ctx->width;
+    dst_frame.u32Height     = ctx->height;
+    dst_frame.u32Field      = VIDEO_FIELD_FRAME;
+    dst_frame.enPixelFormat = vgs_pixel_fmt(ctx->fmt);
+    dst_frame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    dst_frame.enCompressMode = COMPRESS_MODE_NONE;
+    dst_frame.u32PhyAddr[0] = (FH_UINT32)ctx->fb_phy;
+    dst_frame.pVirAddr[0]   = (FH_VOID *)ctx->fbp;
+    dst_frame.u32Stride[0]  = ctx->line_length;
+    dst_frame.s16OffsetLeft = desc->dst_x;
+    dst_frame.s16OffsetTop  = desc->dst_y;
+    dst_frame.s16OffsetRight = ctx->width - desc->dst_x - desc->dst_w;
+    dst_frame.s16OffsetBottom = ctx->height - desc->dst_y - desc->dst_h;
 
-    /* Destination: framebuffer */
-    ctrl.dst_data.data_yaddr.base  = (FH_PHYADDR)ctx->fb_phy;
-    ctrl.dst_data.data_yaddr.vbase = (FH_VOID *)ctx->fbp;
-    ctrl.dst_data.data_yaddr.size  = (FH_UINT32)ctx->screensize;
-    ctrl.dst_data.data_caddr.base  = 0;
-    ctrl.dst_data.data_caddr.size  = 0;
-    ctrl.dst_data.image_size.u32Width  = ctx->width;
-    ctrl.dst_data.image_size.u32Height = ctx->height;
-    ctrl.dst_data.start.u32X = desc->dst_x;
-    ctrl.dst_data.start.u32Y = desc->dst_y;
-
-    ctrl.op_size.u32Width  = desc->dst_w;
-    ctrl.op_size.u32Height = desc->dst_h;
-    ctrl.src_format = vgs_pixel_fmt(desc->src_fmt);
-    ctrl.src_comp   = 3; /* Y + C both present for RGB */
-
-    ret = FH_VGS_V2_CVT(&handle, &ctrl, FH_TRUE); /* instant = block until done */
+    ret = FH_VGS_BeginJob(&handle);
     if (ret != FH_SUCCESS) {
-        fprintf(stderr, "xosfb_v2_blit: FH_VGS_V2_CVT failed (%d)\n", ret);
+        fprintf(stderr, "xosfb_v2_blit: BeginJob failed (%d)\n", ret);
         return -EIO;
     }
-
+    ret = FH_VGS_AddFmtConvertTask(handle, &src_frame, &dst_frame);
+    if (ret != FH_SUCCESS) {
+        FH_VGS_CancelJob(handle);
+        fprintf(stderr, "xosfb_v2_blit: AddFmtConvertTask failed (%d)\n", ret);
+        return -EIO;
+    }
+    ret = FH_VGS_EndJob(handle);
+    if (ret != FH_SUCCESS) {
+        fprintf(stderr, "xosfb_v2_blit: EndJob failed (%d)\n", ret);
+        return -EIO;
+    }
     return 0;
 }
 
 /* ================================================================
- *  VGS2: Hardware Rotate + Blit
+ *  VGS v1: Hardware Rotate + Blit
  * ================================================================ */
 
 int xosfb_v2_rotate_blit(xosfb_ctx_t *ctx,
@@ -516,60 +517,45 @@ int xosfb_v2_rotate_blit(xosfb_ctx_t *ctx,
     if (!(ctx->caps & XOSFB_V2_CAP_ROTATE))    return -ENODEV;
     if (src_w <= 0 || src_h <= 0)              return -EINVAL;
 
-    VGS2_HANDLE handle;
-    VGS_V2_ROT_CTRL ctrl;
+    VGS_TASK_ATTR_S task;
     int ret;
 
-    memset(&ctrl, 0, sizeof(ctrl));
+    memset(&task, 0, sizeof(task));
 
-    /* Source image */
-    ctrl.src_data.data_addr.base  = 0;
-    ctrl.src_data.data_addr.vbase = (FH_VOID *)src_buf;
-    ctrl.src_data.data_addr.size  = (FH_UINT32)(src_w * src_h *
-        (src_fmt == XOSFB_FMT_ARGB8888 ? 4 : 2));
-    ctrl.src_data.data_addr_u.base = 0;
-    ctrl.src_data.data_addr_u.size = 0;
-    ctrl.src_data.data_addr_v.base = 0;
-    ctrl.src_data.data_addr_v.size = 0;
-    ctrl.src_data.image_size.u32Width  = src_w;
-    ctrl.src_data.image_size.u32Height = src_h;
-    ctrl.src_data.start.u32X = 0;
-    ctrl.src_data.start.u32Y = 0;
+    /* Source */
+    task.stImgIn.stVFrame.u32Width      = src_w;
+    task.stImgIn.stVFrame.u32Height     = src_h;
+    task.stImgIn.stVFrame.u32Field      = VIDEO_FIELD_FRAME;
+    task.stImgIn.stVFrame.enPixelFormat = vgs_pixel_fmt(src_fmt);
+    task.stImgIn.stVFrame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    task.stImgIn.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
+    task.stImgIn.stVFrame.pVirAddr[0]   = (FH_VOID *)src_buf;
+    task.stImgIn.stVFrame.u32Stride[0]  = src_w *
+        (src_fmt == XOSFB_FMT_ARGB8888 ? 4 : 2);
 
-    /* Destination */
-    ctrl.dst_data.data_addr.base  = (FH_PHYADDR)ctx->fb_phy;
-    ctrl.dst_data.data_addr.vbase = (FH_VOID *)ctx->fbp;
-    ctrl.dst_data.data_addr.size  = (FH_UINT32)ctx->screensize;
-    ctrl.dst_data.data_addr_u.base = 0;
-    ctrl.dst_data.data_addr_u.size = 0;
-    ctrl.dst_data.data_addr_v.base = 0;
-    ctrl.dst_data.data_addr_v.size = 0;
-    ctrl.dst_data.image_size.u32Width  = ctx->width;
-    ctrl.dst_data.image_size.u32Height = ctx->height;
-    ctrl.dst_data.start.u32X = dst_x;
-    ctrl.dst_data.start.u32Y = dst_y;
+    /* Destination (FB) */
+    task.stImgOut.stVFrame.u32Width      = ctx->width;
+    task.stImgOut.stVFrame.u32Height     = ctx->height;
+    task.stImgOut.stVFrame.u32Field      = VIDEO_FIELD_FRAME;
+    task.stImgOut.stVFrame.enPixelFormat = vgs_pixel_fmt(ctx->fmt);
+    task.stImgOut.stVFrame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    task.stImgOut.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
+    task.stImgOut.stVFrame.u32PhyAddr[0] = (FH_UINT32)ctx->fb_phy;
+    task.stImgOut.stVFrame.pVirAddr[0]   = (FH_VOID *)ctx->fbp;
+    task.stImgOut.stVFrame.u32Stride[0]  = ctx->line_length;
+    task.stImgOut.stVFrame.s16OffsetLeft   = dst_x;
+    task.stImgOut.stVFrame.s16OffsetTop    = dst_y;
 
-    /* Output size: swap w/h for 90/270 */
     if (rotation == XOSFB_V2_ROTATE_90 || rotation == XOSFB_V2_ROTATE_270) {
-        ctrl.op_size.u32Width  = src_h;
-        ctrl.op_size.u32Height = src_w;
-    } else {
-        ctrl.op_size.u32Width  = src_w;
-        ctrl.op_size.u32Height = src_h;
+        task.stImgOut.stVFrame.u32Width  = src_h;
+        task.stImgOut.stVFrame.u32Height = src_w;
     }
 
-    ctrl.src_format = vgs_pixel_fmt(src_fmt);
-    ctrl.src_comp   = 3;
-    ctrl.src_pixw   = src_w;
-    ctrl.rotate     = (FH_ROTATE_OPS)rotation;
-    ctrl.rotmode    = 0;
-
-    ret = FH_VGS_V2_ROT(&handle, &ctrl, FH_TRUE); /* instant */
+    ret = FH_VGS_DoRotate(&task, (FH_ROTATE_OPS)rotation);
     if (ret != FH_SUCCESS) {
-        fprintf(stderr, "xosfb_v2_rotate_blit: FH_VGS_V2_ROT failed (%d)\n", ret);
+        fprintf(stderr, "xosfb_v2_rotate_blit: FH_VGS_DoRotate failed (%d)\n", ret);
         return -EIO;
     }
-
     return 0;
 }
 
@@ -807,25 +793,23 @@ static void tde_exit(xosfb_ctx_t *ctx)
 
 static int vgs_init(xosfb_ctx_t *ctx)
 {
-    (void)ctx;
-    /* FH_VGS_V2_Init is declared extern in the MPI headers.
-     * If the linker can't find it, guard with #ifdef or use weak symbol. */
-    extern FH_SINT32 FH_VGS_V2_Init(FH_VOID);
-    int ret = FH_VGS_V2_Init();
+    int ret = FH_VGS_Open();
     if (ret != FH_SUCCESS) {
-        fprintf(stderr, "xosfb_v2: FH_VGS_V2_Init failed (%d)\n", ret);
+        fprintf(stderr, "xosfb_v2: FH_VGS_Open failed (%d)\n", ret);
         return -1;
     }
     ctx->vgs_opened = 1;
-    printf("xosfb_v2: VGS2 initialized\n");
+    printf("xosfb_v2: VGS opened\n");
     return 0;
 }
 
 static void vgs_exit(xosfb_ctx_t *ctx)
 {
-    /* VGS2 has no explicit close/exit in this SDK version */
-    ctx->vgs_opened = 0;
-    printf("xosfb_v2: VGS2 exited\n");
+    if (ctx->vgs_opened) {
+        FH_VGS_Close();
+        ctx->vgs_opened = 0;
+        printf("xosfb_v2: VGS closed\n");
+    }
 }
 
 /* ================================================================
@@ -876,10 +860,10 @@ static void set_bitfields(struct fb_var_screeninfo *var, xosfb_pixel_format_t fm
 static int vgs_pixel_fmt(xosfb_pixel_format_t fmt)
 {
     switch (fmt) {
-    case XOSFB_FMT_ARGB8888:  return 6;  /* FYFB_FMT_ARGB8888 */
-    case XOSFB_FMT_ARGB1555:  return 5;  /* FYFB_FMT_ARGB1555 */
-    case XOSFB_FMT_ARGB0565:  return 0;  /* FYFB_FMT_RGB565 */
-    default:                  return 6;
+    case XOSFB_FMT_ARGB8888:  return PIXEL_FMT_RGB_8888;   /* 10 */
+    case XOSFB_FMT_ARGB1555:  return PIXEL_FMT_RGB_1555;   /* 8  */
+    case XOSFB_FMT_ARGB0565:  return PIXEL_FMT_RGB_565;    /* 7  */
+    default:                  return PIXEL_FMT_RGB_8888;
     }
 }
 
