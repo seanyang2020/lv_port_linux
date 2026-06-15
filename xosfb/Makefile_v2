@@ -1,0 +1,63 @@
+# xosfb_v2 Makefile — builds libxosfb_v2.a with hardware acceleration
+# Extends v1 libxosfb.a by linking libmpi.a for TDE2 + VGS2 support.
+#
+# Usage:
+#   make -f Makefile_v2          # build libxosfb_v2.a
+#   make -f Makefile_v2 clean
+
+include ../../Makefile.param
+
+MPI_LIBS := $(REL_LIB)/libmpi.a
+TARGET   := libxosfb_v2.a
+
+# v1 core
+XOSFB_V1_SRC := xosfb.c
+XOSFB_V1_OBJ := $(XOSFB_V1_SRC:%.c=%.o)
+
+# v2 extension (hardware acceleration)
+XOSFB_V2_SRC := xosfb_v2.c
+XOSFB_V2_OBJ := $(XOSFB_V2_SRC:%.c=%.o)
+
+# Note: xosfb_v2 implements its own VO/SYS init using FH_VO_* / FH_SYS_* MPI,
+# so it does NOT depend on sample_comm_*.o from ../../common/.
+
+# Additional include paths for MPI headers
+CFLAGS += -I$(MPP_DIR)/drv_include
+CFLAGS += -I$(MPP_DIR)/include/dsp
+
+$(info ========================================)
+$(info xosfb_v2 build)
+$(info MPP_DIR  = $(MPP_DIR))
+$(info CFLAGS   = $(CFLAGS))
+$(info MPI_LIBS = $(MPI_LIBS))
+$(info COMM_OBJ = (self-contained, no external .o needed))
+$(info ========================================)
+
+.PHONY: all clean
+
+all: $(TARGET)
+
+%.o: %.c
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+# Combined static library: xosfb v1 + v2 + libmpi.a
+$(TARGET): $(XOSFB_V1_OBJ) $(XOSFB_V2_OBJ)
+	@echo "Creating combined $@ ..."
+	@rm -rf .combine $(TARGET)
+	@mkdir -p .combine
+	@( \
+		cd .combine; \
+		$(AR) rcs tmp1.a $(addprefix ../,$(XOSFB_V1_OBJ) $(XOSFB_V2_OBJ)); \
+		$(AR) x tmp1.a; \
+		$(AR) x $(MPI_LIBS); \
+		$(AR) rcs ../$(TARGET) *.o; \
+		CNT=`$(AR) t ../$(TARGET) | wc -l`; \
+		echo "$(TARGET) built successfully ($$CNT objects)"; \
+	)
+	@rm -rf .combine
+
+clean:
+	@rm -f $(XOSFB_V1_OBJ)
+	@rm -f $(XOSFB_V2_OBJ)
+	@rm -f $(TARGET)
+	@rm -rf .combine

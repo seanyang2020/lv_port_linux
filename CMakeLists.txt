@@ -253,7 +253,8 @@ if (CONFIG_LV_USE_LINUX_FBDEV)
 
     if(EXISTS "${XOSFB_V2_LIB}" AND EXISTS "${XOSFB_INC}/xosfb_v2.h")
         message("Including XOSFB v2 support (TDE2+VGS2 hardware accelerated)")
-        list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/xosfb.c)
+        # xosfb_v2_lvgl.c: LVGL display driver glue for libxosfb_v2.a
+        list(APPEND LV_LINUX_BACKEND_SRC src/lib/display_backends/xosfb_v2_lvgl.c)
         list(APPEND PKG_CONFIG_INC ${XOSFB_INC})
         list(APPEND PKG_CONFIG_LIB ${XOSFB_V2_LIB})
     elseif(EXISTS "${XOSFB_V1_LIB}" AND EXISTS "${XOSFB_INC}/xosfb.h")
