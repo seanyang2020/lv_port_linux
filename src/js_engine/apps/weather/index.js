@@ -292,17 +292,17 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
         });
     }
 
-    // Press: only double-tap wakes (single tap does nothing when dimmed)
+    // Double-tap toggles screen on/off
     lvgljs.onPress(function() {
         lastActivity = Date.now();
-        if (!screenOn && CFG.screen.double_tap_wake) {
-            var now = Date.now();
-            if (now - lastTap < 400 && lastTap > 0) {
-                wakeScreen();
-                lastTap = 0;
-            } else {
-                lastTap = now;
-            }
+        if (!CFG.screen.double_tap_wake) return;
+        var now = Date.now();
+        if (now - lastTap < 400 && lastTap > 0) {
+            if (screenOn) { dimScreen();  lvgljs.print("Double-tap: dim"); }
+            else          { wakeScreen(); lvgljs.print("Double-tap: wake"); }
+            lastTap = 0;
+        } else {
+            lastTap = now;
         }
     });
 
