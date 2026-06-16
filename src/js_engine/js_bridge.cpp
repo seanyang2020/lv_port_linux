@@ -534,18 +534,20 @@ static void global_release_cb(lv_event_t * e) { (void)e; fire_callback(g_release
 static JSValue js_on_press(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
     if (g_press_cbid < 0) {
-        lv_obj_t * scr = lv_screen_active();
-        lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(scr, global_press_cb, LV_EVENT_PRESSED, NULL);
+        /* Register on the display's indev — catches all touches regardless
+         * of which child widget is under the finger. */
+        lv_indev_t * indev = lv_indev_active();
+        if (!indev) indev = lv_indev_get_next(NULL);
+        if (indev) lv_indev_add_event_cb(indev, global_press_cb, LV_EVENT_PRESSED, NULL);
     }
     g_press_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
 }
 static JSValue js_on_release(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
     if (g_release_cbid < 0) {
-        lv_obj_t * scr = lv_screen_active();
-        lv_obj_add_flag(scr, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(scr, global_release_cb, LV_EVENT_RELEASED, NULL);
+        lv_indev_t * indev = lv_indev_active();
+        if (!indev) indev = lv_indev_get_next(NULL);
+        if (indev) lv_indev_add_event_cb(indev, global_release_cb, LV_EVENT_RELEASED, NULL);
     }
     g_release_cbid = store_callback(C, A[0]); return JS_UNDEFINED;
 }
