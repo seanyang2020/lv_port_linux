@@ -263,7 +263,8 @@ var lastTap = 0, tapCount = 0;
 
 function dimScreen() {
     if (!screenOn || !CFG.screen.auto_off_enabled) return;
-    lvgljs.style(dimOverlay, "visible", 1);
+    lvgljs.backlight(0);                           // Linux backlight off
+    lvgljs.style(dimOverlay, "visible", 1);         // overlay fallback
     lvgljs.setOpacity(dimOverlay, 255);
     screenOn = false;
     lvgljs.print("Screen dimmed");
@@ -271,6 +272,7 @@ function dimScreen() {
 
 function wakeScreen() {
     if (screenOn) return;
+    lvgljs.backlight(1);                           // Linux backlight on
     lvgljs.setOpacity(dimOverlay, 0);
     lvgljs.style(dimOverlay, "visible", 0);
     screenOn = true;

@@ -558,6 +558,53 @@ static JSValue js_to_front(JSContext * C, JSValue T, int N, JSValue * A) {
     return JS_UNDEFINED;
 }
 
+/* ---- backlight (Linux sysfs) ---- */
+#include <dirent.h>
+static char g_bl_path[256] = {0};
+static int  g_bl_max = 255;
+static int  g_bl_saved = -1;
+
+static void bl_detect(void) {
+    if (g_bl_path[0]) return;
+    DIR *d = opendir("/sys/class/backlight");
+    if (!d) { strcpy(g_bl_path, "/sys/class/backlight/backlight"); return; }
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        snprintf(g_bl_path, sizeof(g_bl_path), "/sys/class/backlight/%s", e->d_name);
+        break;
+    }
+    closedir(d);
+    if (!g_bl_path[0]) strcpy(g_bl_path, "/sys/class/backlight/backlight");
+    /* Read max brightness */
+    char mp[320], buf[32] = {0};
+    snprintf(mp, sizeof(mp), "%s/max_brightness", g_bl_path);
+    FILE *fp = fopen(mp, "r");
+    if (fp) { if (fgets(buf, sizeof(buf), fp)) g_bl_max = atoi(buf); fclose(fp); }
+    if (g_bl_max <= 0) g_bl_max = 255;
+}
+
+static JSValue js_backlight(JSContext *C, JSValue T, int N, JSValue *A) {
+    (void)T; if (N < 1) return JS_UNDEFINED;
+    int on; JS_ToInt32(C, &on, A[0]);
+    bl_detect();
+    char bp[320]; snprintf(bp, sizeof(bp), "%s/brightness", g_bl_path);
+    FILE *fp = fopen(bp, "r+");
+    if (!fp) { fp = fopen(bp, "w"); if (!fp) return JS_UNDEFINED; }
+    if (on) {
+        /* Restore saved brightness, or use max */
+        int v = (g_bl_saved > 0) ? g_bl_saved : g_bl_max;
+        fprintf(fp, "%d\n", v);
+    } else {
+        /* Save current, then set to 0 */
+        char buf[32] = {0};
+        rewind(fp); if (fgets(buf, sizeof(buf), fp)) g_bl_saved = atoi(buf);
+        fprintf(fp, "0\n");
+    }
+    fclose(fp);
+    return JS_UNDEFINED;
+}
+
 /* ---- keyboard ---- */
 static JSValue js_keyboard(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N < 1) return JS_UNDEFINED;
@@ -790,6 +837,7 @@ static void register_full_api(JSContext * ctx) {
     L(js_keyboard,      "keyboard",       1);
     L(js_dropdown,      "dropdown",       4);
     L(js_dropdown_set,  "dropdownSet",    2);
+    L(js_backlight,     "backlight",       1);
     L(js_style,         "style",          3);
     L(js_http_get,      "httpGet",        2);
     L(js_exit,          "exit",           0);
