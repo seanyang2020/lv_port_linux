@@ -294,11 +294,10 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
 
     // Double-tap toggles screen on/off
     lvgljs.onPress(function() {
-        lvgljs.print("TAP screenOn="+screenOn+" lastTap="+lastTap);
         lastActivity = Date.now();
         if (!CFG.screen.double_tap_wake) return;
         var now = Date.now();
-        if (now - lastTap < 400 && lastTap > 0) {
+        if (now - lastTap < 500 && lastTap > 0) {
             if (screenOn) { dimScreen();  lvgljs.print("Double-tap: dim"); }
             else          { wakeScreen(); lvgljs.print("Double-tap: wake"); }
             lastTap = 0;
@@ -306,7 +305,6 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
             lastTap = now;
         }
     });
-    lvgljs.print("Double-tap registered, double_tap_wake="+CFG.screen.double_tap_wake);
 
     // Schedule timer
     if (CFG.screen.schedule_enabled) {
