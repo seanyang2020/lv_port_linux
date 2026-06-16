@@ -294,6 +294,7 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
 
     // Double-tap toggles screen on/off
     lvgljs.onPress(function() {
+        lvgljs.print("TAP screenOn="+screenOn+" lastTap="+lastTap);
         lastActivity = Date.now();
         if (!CFG.screen.double_tap_wake) return;
         var now = Date.now();
@@ -305,6 +306,7 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
             lastTap = now;
         }
     });
+    lvgljs.print("Double-tap registered, double_tap_wake="+CFG.screen.double_tap_wake);
 
     // Schedule timer
     if (CFG.screen.schedule_enabled) {
