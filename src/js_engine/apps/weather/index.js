@@ -317,11 +317,12 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
             if (hm >= onHM && hm < offHM) {
                 if (!screenOn) { wakeScreen(); lvgljs.print("Schedule: wake "+CFG.screen.schedule_on); }
             } else {
-                if (screenOn)  { dimScreen();  lvgljs.print("Schedule: dim "+CFG.screen.schedule_off); }
+                // Only dim if screen was previously on (don't dim on cold start)
+                if (screenOn && lastActivity > 0) { dimScreen(); lvgljs.print("Schedule: dim "+CFG.screen.schedule_off); }
             }
         }
         lvgljs.setInterval(60000, checkSchedule);
-        checkSchedule();
+        // Don't call immediately — let the first interval fire naturally
     }
 
     scheduleDim();
