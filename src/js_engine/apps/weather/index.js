@@ -293,15 +293,18 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
         });
     }
 
-    // Double-tap toggles screen on/off
+    // Double-tap toggles screen on/off (1s cooldown after toggle)
+    var toggleCooldown = 0;
     lvgljs.onPress(function() {
         lastActivity = Date.now();
         if (!CFG.screen.double_tap_wake) return;
         var now = Date.now();
+        if (now - toggleCooldown < 1000) return;  // cooldown after toggle
         if (now - lastTap < 500 && lastTap > 0) {
-            if (screenOn) { dimScreen();  lvgljs.print("Double-tap: dim"); }
-            else          { wakeScreen(); lvgljs.print("Double-tap: wake"); }
+            if (screenOn) { dimScreen(); lvgljs.print("Dbl-tap: dim"); }
+            else          { wakeScreen(); lvgljs.print("Dbl-tap: wake"); }
             lastTap = 0;
+            toggleCooldown = now;
         } else {
             lastTap = now;
         }
