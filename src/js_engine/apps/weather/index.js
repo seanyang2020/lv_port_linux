@@ -245,4 +245,67 @@ updateClock();
 lvgljs.setInterval(1000, updateClock);
 // "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
+// ---- Screen power management (config.json) ----
+var CFG = { screen: { auto_off_minutes: 5, auto_off_enabled: true, wake_timeout_seconds: 15, double_tap_wake: true } };
+try {
+    var raw = lvgljs.readFile(__dirname + "/config.json");
+    if (raw) { var j = JSON.parse(raw); if (j.screen) CFG.screen = j.screen; }
+} catch(e) { lvgljs.print("Config: using defaults"); }
+
+var dimOverlay = lvgljs.panel(0, 0, W.w, W.h);        // full-screen black overlay
+lvgljs.setBgColor(dimOverlay, 0x000000);
+lvgljs.setOpacity(dimOverlay, 0);                       // start transparent
+lvgljs.toFront(dimOverlay);
+lvgljs.style(dimOverlay, "visible", 0);                 // hidden when off
+
+var screenOn = true, lastActivity = Date.now(), dimTimer = null;
+var lastTap = 0, tapCount = 0;
+
+function dimScreen() {
+    if (!screenOn || !CFG.screen.auto_off_enabled) return;
+    lvgljs.style(dimOverlay, "visible", 1);
+    lvgljs.setOpacity(dimOverlay, 255);
+    screenOn = false;
+    lvgljs.print("Screen dimmed");
+}
+
+function wakeScreen() {
+    if (screenOn) return;
+    lvgljs.setOpacity(dimOverlay, 0);
+    lvgljs.style(dimOverlay, "visible", 0);
+    screenOn = true;
+    lastActivity = Date.now();
+    scheduleDim();
+    lvgljs.print("Screen woke");
+}
+
+function scheduleDim() {
+    if (dimTimer) { lvgljs.clearInterval(dimTimer); dimTimer = null; }
+    if (!CFG.screen.auto_off_enabled) return;
+    var checkInterval = screenOn ? CFG.screen.auto_off_minutes * 60000 : 10000;
+    dimTimer = lvgljs.setInterval(checkInterval, function() {
+        var timeout = screenOn ? CFG.screen.auto_off_minutes * 60000 : CFG.screen.wake_timeout_seconds * 1000;
+        if (Date.now() - lastActivity >= timeout) dimScreen();
+    });
+}
+
+// Reset activity timer on any screen touch
+lvgljs.onPress(function() {
+    lastActivity = Date.now();
+    // Double-tap detection for wake
+    var now = Date.now();
+    if (!screenOn && CFG.screen.double_tap_wake) {
+        if (now - lastTap < 400) {
+            tapCount++;
+            if (tapCount >= 2) { wakeScreen(); tapCount = 0; }
+        } else {
+            tapCount = 1;
+        }
+        lastTap = now;
+    } else if (!screenOn) {
+        wakeScreen(); // single tap also wakes
+    }
+});
+
+scheduleDim();
 lvgljs.print("Weather ready [" + L + "]");

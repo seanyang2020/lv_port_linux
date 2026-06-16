@@ -1,0 +1,14 @@
+{
+    "screen": {
+        "auto_off_minutes": 5,
+        "auto_off_enabled": true,
+        "wake_timeout_seconds": 15,
+        "double_tap_wake": true
+    },
+    "weather": {
+        "refresh_minutes": 30,
+        "city": "Shanghai",
+        "latitude": 31.23,
+        "longitude": 121.47
+    }
+}
