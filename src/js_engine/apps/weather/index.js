@@ -245,88 +245,87 @@ updateClock();
 lvgljs.setInterval(1000, updateClock);
 // "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
-// ---- Screen power management (config.json) ----
-var CFG = { screen: { auto_off_minutes: 5, auto_off_enabled: true, wake_timeout_seconds: 15, double_tap_wake: true } };
+// ---- Screen power management (config.json, all disabled by default) ----
+var CFG = { screen: { auto_off_enabled: false, double_tap_wake: false, schedule_enabled: false } };
+var hasConfig = false;
 try {
     var raw = lvgljs.readFile(__dirname + "/config.json");
-    if (raw) { var j = JSON.parse(raw); if (j.screen) CFG.screen = j.screen; }
-} catch(e) { lvgljs.print("Config: using defaults"); }
+    if (raw) { var j = JSON.parse(raw); if (j.screen) { CFG.screen = j.screen; hasConfig = true; } }
+} catch(e) {}
 
-var dimOverlay = lvgljs.panel(0, 0, W.w, W.h);        // full-screen black overlay
-lvgljs.setBgColor(dimOverlay, 0x000000);
-lvgljs.setOpacity(dimOverlay, 0);                       // start transparent
-lvgljs.toFront(dimOverlay);
-lvgljs.style(dimOverlay, "visible", 0);                 // hidden when off
+var dimOverlay = null, screenOn = true, lastActivity = Date.now(), dimTimer = null;
+var lastTap = 0;
 
-var screenOn = true, lastActivity = Date.now(), dimTimer = null;
-var lastTap = 0, tapCount = 0;
+// Only create overlay & start timers if config exists with features enabled
+if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || CFG.screen.schedule_enabled)) {
+    lvgljs.print("Power mgmt: config loaded, features enabled");
 
-function dimScreen() {
-    if (!screenOn || !CFG.screen.auto_off_enabled) return;
-    lvgljs.backlight(0);                           // Linux backlight off
-    lvgljs.style(dimOverlay, "visible", 1);         // overlay fallback
-    lvgljs.setOpacity(dimOverlay, 255);
-    screenOn = false;
-    lvgljs.print("Screen dimmed");
-}
-
-function wakeScreen() {
-    if (screenOn) return;
-    lvgljs.backlight(1);                           // Linux backlight on
+    dimOverlay = lvgljs.panel(0, 0, W.w, W.h);
+    lvgljs.setBgColor(dimOverlay, 0x000000);
     lvgljs.setOpacity(dimOverlay, 0);
+    lvgljs.toFront(dimOverlay);
     lvgljs.style(dimOverlay, "visible", 0);
-    screenOn = true;
-    lastActivity = Date.now();
-    scheduleDim();
-    lvgljs.print("Screen woke");
-}
 
-function scheduleDim() {
-    if (dimTimer) { lvgljs.clearInterval(dimTimer); dimTimer = null; }
-    if (!CFG.screen.auto_off_enabled) return;
-    var checkInterval = screenOn ? CFG.screen.auto_off_minutes * 60000 : 10000;
-    dimTimer = lvgljs.setInterval(checkInterval, function() {
-        var timeout = screenOn ? CFG.screen.auto_off_minutes * 60000 : CFG.screen.wake_timeout_seconds * 1000;
-        if (Date.now() - lastActivity >= timeout) dimScreen();
-    });
-}
+    function dimScreen() {
+        if (!screenOn) return;
+        lvgljs.backlight(0);
+        lvgljs.style(dimOverlay, "visible", 1);
+        lvgljs.setOpacity(dimOverlay, 255);
+        screenOn = false; lvgljs.print("Screen dimmed");
+    }
+    function wakeScreen() {
+        if (screenOn) return;
+        lvgljs.backlight(1);
+        lvgljs.setOpacity(dimOverlay, 0);
+        lvgljs.style(dimOverlay, "visible", 0);
+        screenOn = true; lastActivity = Date.now();
+        lvgljs.print("Screen woke");
+    }
+    function scheduleDim() {
+        if (dimTimer) { lvgljs.clearInterval(dimTimer); dimTimer = null; }
+        if (!CFG.screen.auto_off_enabled) return;
+        var interval = screenOn ? CFG.screen.auto_off_minutes * 60000 : 10000;
+        dimTimer = lvgljs.setInterval(interval, function() {
+            var timeout = screenOn ? CFG.screen.auto_off_minutes * 60000
+                                   : (CFG.screen.wake_timeout_seconds || 15) * 1000;
+            if (Date.now() - lastActivity >= timeout) dimScreen();
+        });
+    }
 
-// Reset activity timer on any screen touch
-lvgljs.onPress(function() {
-    lastActivity = Date.now();
-    // Double-tap detection for wake
-    var now = Date.now();
-    if (!screenOn && CFG.screen.double_tap_wake) {
-        if (now - lastTap < 400) {
-            tapCount++;
-            if (tapCount >= 2) { wakeScreen(); tapCount = 0; }
-        } else {
-            tapCount = 1;
+    // Press: only double-tap wakes (single tap does nothing when dimmed)
+    lvgljs.onPress(function() {
+        lastActivity = Date.now();
+        if (!screenOn && CFG.screen.double_tap_wake) {
+            var now = Date.now();
+            if (now - lastTap < 400 && lastTap > 0) {
+                wakeScreen();
+                lastTap = 0;
+            } else {
+                lastTap = now;
+            }
         }
-        lastTap = now;
-    } else if (!screenOn) {
-        wakeScreen(); // single tap also wakes
-    }
-});
+    });
 
-// Time-based schedule: auto on at schedule_on, off at schedule_off
-function checkSchedule() {
-    if (!CFG.screen.schedule_enabled) return;
-    var onParts = CFG.screen.schedule_on.split(":");
-    var offParts = CFG.screen.schedule_off.split(":");
-    var onHM = parseInt(onParts[0]) * 60 + parseInt(onParts[1]);
-    var offHM = parseInt(offParts[0]) * 60 + parseInt(offParts[1]);
-    var now = new Date();
-    var hm = now.getHours() * 60 + now.getMinutes();
-
-    if (hm >= onHM && hm < offHM) {
-        if (!screenOn) { wakeScreen(); lvgljs.print("Schedule: auto-wake " + CFG.screen.schedule_on); }
-    } else {
-        if (screenOn)  { dimScreen();  lvgljs.print("Schedule: auto-dim " + CFG.screen.schedule_off); }
+    // Schedule timer
+    if (CFG.screen.schedule_enabled) {
+        function checkSchedule() {
+            var onP = CFG.screen.schedule_on.split(":");
+            var offP = CFG.screen.schedule_off.split(":");
+            var onHM = parseInt(onP[0])*60 + parseInt(onP[1]);
+            var offHM = parseInt(offP[0])*60 + parseInt(offP[1]);
+            var now = new Date(), hm = now.getHours()*60 + now.getMinutes();
+            if (hm >= onHM && hm < offHM) {
+                if (!screenOn) { wakeScreen(); lvgljs.print("Schedule: wake "+CFG.screen.schedule_on); }
+            } else {
+                if (screenOn)  { dimScreen();  lvgljs.print("Schedule: dim "+CFG.screen.schedule_off); }
+            }
+        }
+        lvgljs.setInterval(60000, checkSchedule);
+        checkSchedule();
     }
+
+    scheduleDim();
+} else {
+    lvgljs.print("Power mgmt: no config, disabled");
 }
-lvgljs.setInterval(60000, checkSchedule); // check every minute
-checkSchedule(); // immediate check on start
-
-scheduleDim();
 lvgljs.print("Weather ready [" + L + "]");
