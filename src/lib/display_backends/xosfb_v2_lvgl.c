@@ -100,27 +100,20 @@ static lv_display_t *init_xosfb_v2(void)
     lv_display_set_driver_data(disp, drv);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_ARGB8888);
 
-    /* Rotation strategy:
-     * - lv_display_set_rotation() → touch transform (always works)
-     * - VGS2 rotate_blit → display rotation (hardware)
-     * LVGL renders normally (un-rotated), VGS2 rotates in flush_cb. */
+    /* Rotation: VGS2 hardware rotates display, LVGL renders at native
+     * resolution (zero overhead). Touch transform is separate.
+     * NOT using lv_display_set_rotation() — that causes LVGL to
+     * software-transform every widget coordinate, killing FPS. */
     bool need_rotate = (rot_deg != 0);
     bool use_hw_rotate = need_rotate && drv->use_vgs2
                          && (caps & XOSFB_V2_CAP_ROTATE);
-    if (need_rotate) {
+    if (use_hw_rotate) {
         drv->direct = false;
-        /* Touch transform only — LVGL handles this correctly */
-        lv_display_rotation_t lr = LV_DISPLAY_ROTATION_0;
-        if (rot_deg == 90)  lr = LV_DISPLAY_ROTATION_90;
-        if (rot_deg == 180) lr = LV_DISPLAY_ROTATION_180;
-        if (rot_deg == 270) lr = LV_DISPLAY_ROTATION_270;
-        lv_display_set_rotation(disp, lr);
-        if (use_hw_rotate) {
-            drv->hw_rotate = true;  /* confirmed by DMA success below */
-            drv->hw_deg = rot_deg;
-        } else {
-            LV_LOG_USER("XOSFB-V2: rotation %d° (LVGL SW + touch)", rot_deg);
-        }
+        drv->hw_rotate = true;
+        drv->hw_deg = rot_deg;
+        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 HW, LVGL native)", rot_deg);
+    } else if (need_rotate) {
+        LV_LOG_USER("XOSFB-V2: rotation %d° (unavailable)", rot_deg);
     } else {
         LV_LOG_USER("XOSFB-V2: rotation NONE");
     }
