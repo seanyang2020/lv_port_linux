@@ -131,6 +131,7 @@ void xosfb_v2_free_dma(xosfb_ctx_t *ctx, xosfb_v2_dma_buf_t *buf);
  * **********************/
 
 void *xosfb_get_fb_ptr(xosfb_ctx_t *ctx);
+unsigned long xosfb_get_fb_phy_addr(xosfb_ctx_t *ctx);
 int xosfb_get_line_length(xosfb_ctx_t *ctx);
 void xosfb_get_resolution(xosfb_ctx_t *ctx, int *w, int *h);
 int xosfb_get_bpp(xosfb_ctx_t *ctx);

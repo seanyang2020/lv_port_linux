@@ -25,14 +25,15 @@
 
 typedef struct {
     xosfb_ctx_t       *ctx;
-    xosfb_v2_dma_buf_t dma;
+    xosfb_v2_dma_buf_t dma;       /* LVGL draw buffer (FULL mode) */
+    xosfb_v2_dma_buf_t fb_dma;    /* FB wrapper for rotate_blit */
     uint8_t           *draw_buf;
     int                px_size;
     int                fb_stride;
     int                w, h;
     bool               use_vgs2;
-    bool               hw_rotate;   /* VGS2 hardware rotation active */
-    int                hw_deg;      /* 90/180/270 */
+    bool               hw_rotate;
+    int                hw_deg;
     bool               direct;
 } xosfb_v2_drv_t;
 
@@ -43,6 +44,19 @@ static void del_cb(lv_event_t *e);
 static uint32_t tick_get_cb(void);
 
 static char *backend_name = "XOSFB-V2";
+static int  g_hw_rotation = 0;
+static int  g_disp_w = 800, g_disp_h = 1280;
+
+/* Touch coordinate transform — call from evdev handler before lv_indev_read.
+ * Only needed for VGS hardware rotation. Software rotation is auto-handled. */
+void xosfb_v2_transform_touch(int *x, int *y)
+{
+    if (g_hw_rotation == 0) return;
+    int ox = *x, oy = *y;
+    if (g_hw_rotation == 90)      { *x = oy;         *y = g_disp_w - ox; }
+    else if (g_hw_rotation == 180){ *x = g_disp_w - ox; *y = g_disp_h - oy; }
+    else if (g_hw_rotation == 270){ *x = g_disp_h - oy; *y = ox;           }
+}
 
 int backend_init_xosfb(backend_t *b)
 {
@@ -100,23 +114,8 @@ static lv_display_t *init_xosfb_v2(void)
     lv_display_set_driver_data(disp, drv);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_ARGB8888);
 
-    /* Rotation: VGS2 hardware rotates display, LVGL renders at native
-     * resolution (zero overhead). Touch transform is separate.
-     * NOT using lv_display_set_rotation() — that causes LVGL to
-     * software-transform every widget coordinate, killing FPS. */
     bool need_rotate = (rot_deg != 0);
-    bool use_hw_rotate = need_rotate && drv->use_vgs2
-                         && (caps & XOSFB_V2_CAP_ROTATE);
-    if (use_hw_rotate) {
-        drv->direct = false;
-        drv->hw_rotate = true;
-        drv->hw_deg = rot_deg;
-        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 HW, LVGL native)", rot_deg);
-    } else if (need_rotate) {
-        LV_LOG_USER("XOSFB-V2: rotation %d° (unavailable)", rot_deg);
-    } else {
-        LV_LOG_USER("XOSFB-V2: rotation NONE");
-    }
+    if (need_rotate) drv->direct = false;  /* rotation requires DMA FULL */
 
     /* ---- Buffer setup: single allocation ---- */
     if (!drv->draw_buf) {
@@ -153,13 +152,26 @@ static lv_display_t *init_xosfb_v2(void)
     lv_display_set_flush_cb(disp, flush_cb);
     lv_display_add_event_cb(disp, del_cb, LV_EVENT_DELETE, NULL);
 
-    /* HW rotate requires DMA — disable if allocation failed */
-    if (drv->hw_rotate && !drv->dma.virt_addr) {
-        LV_LOG_WARN("XOSFB-V2: DMA failed → rotation fallback to LVGL SW only");
-        drv->hw_rotate = false;
+    /* Rotation: VGS2 hardware rotate on last flush. */
+    if (need_rotate && drv->use_vgs2 && (caps & XOSFB_V2_CAP_ROTATE) && drv->dma.virt_addr) {
+        drv->hw_rotate = true;
+        g_hw_rotation = rot_deg; g_disp_w = w; g_disp_h = h;
+        drv->hw_deg    = rot_deg;
+        drv->direct = false;
+        /* Touch-only rotation (no matrix_rotation → no FPS impact) */
+        lv_display_rotation_t lr = LV_DISPLAY_ROTATION_0;
+        if (rot_deg == 90)  lr = LV_DISPLAY_ROTATION_90;
+        if (rot_deg == 180) lr = LV_DISPLAY_ROTATION_180;
+        if (rot_deg == 270) lr = LV_DISPLAY_ROTATION_270;
+        lv_display_set_rotation(disp, lr);
+        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 rotate + LVGL touch)", rot_deg);
+    } else if (need_rotate) {
+        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 unavailable)", rot_deg);
+    } else {
+        LV_LOG_USER("XOSFB-V2: rotation NONE");
     }
-    if (drv->hw_rotate)
-        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 HW + LVGL touch)", drv->hw_deg);
+
+    /* DIRECT mode rotate: fb_dma wraps FB itself, no separate DMA needed */
 
     LV_LOG_INFO("XOSFB-V2 ready");
     return disp;
@@ -181,19 +193,18 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
     int w = lv_area_get_width(area), h = lv_area_get_height(area);
     if (w <= 0 || h <= 0) { lv_display_flush_ready(disp); return; }
 
-    /* Only last flush carries complete frame (FULL mode semantics) */
-    if (!lv_display_flush_is_last(disp)) { lv_display_flush_ready(disp); return; }
-
     if (drv->hw_rotate) {
-        /* VGS2 hardware rotation: LVGL renders + touch via set_rotation,
-         * VGS2 rotates the output buffer to FB. */
         xosfb_v2_rotation_t r = XOSFB_V2_ROTATE_0;
         if (drv->hw_deg == 90)       r = XOSFB_V2_ROTATE_90;
         else if (drv->hw_deg == 180) r = XOSFB_V2_ROTATE_180;
         else if (drv->hw_deg == 270) r = XOSFB_V2_ROTATE_270;
         xosfb_v2_rotate_blit(drv->ctx, &drv->dma, drv->w, drv->h,
                              XOSFB_FMT_ARGB8888, 0, 0, r);
-    } else if (drv->direct) {
+        xosfb_pan_display(drv->ctx);
+        lv_display_flush_ready(disp);
+        return;
+    }
+    if (drv->direct) {
     } else if (drv->use_vgs2) {
         /* VGS2 blit only when format conversion needed (ARGB8888→native FB fmt).
          * Same-format ARGB8888→ARGB8888 is rejected by VGS2 CSC hardware. */

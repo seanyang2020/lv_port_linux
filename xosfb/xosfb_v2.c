@@ -948,6 +948,11 @@ void *xosfb_get_fb_ptr(xosfb_ctx_t *ctx)
     return ctx ? ctx->fbp : NULL;
 }
 
+unsigned long xosfb_get_fb_phy_addr(xosfb_ctx_t *ctx)
+{
+    return ctx ? ctx->fb_phy : 0;
+}
+
 int xosfb_get_line_length(xosfb_ctx_t *ctx)
 {
     return ctx ? ctx->line_length : 0;

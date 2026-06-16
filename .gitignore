@@ -61,3 +61,4 @@ dkms.conf
 /.settings/
 .*project
 .deps
+build-*/

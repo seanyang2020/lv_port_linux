@@ -36,9 +36,9 @@ fi
 alias armstrip='/home/scm/prebuilt/gcc-linaro-14.0.0-2023.06-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-strip'
 . ~/bin/env.sh
 . ~/bin/qmenv qm10xd
-cp  $LVGL_LINUX_PATH/build/bin/lvglsim $LVGL_LINUX_PATH/build/bin/lvglsim_strip
-armstrip $LVGL_LINUX_PATH/build/bin/lvglsim_strip
-adb push $LVGL_LINUX_PATH/build/bin/lvglsim_strip /mnt/sdcard/lvglsim
+cp  $LVGL_LINUX_PATH/build-xos/bin/lvglsim $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip
+armstrip $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip
+adb push $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip /mnt/sdcard/lvglsim
 export BAIDU_CLIENT_ID=$(sean-token.py key baidupan AppKey)
 export BAIDU_CLIENT_SECRET=$(sean-token.py key baidupan Secretkey)
 export BAIDU_DEVICE_ID=$(sean-token.py key baidupan AppID)

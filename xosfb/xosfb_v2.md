@@ -438,6 +438,23 @@ FB (竖屏 800×1280, 物理 LCD 方向)
 | VGS 驱动未加载 | **A: 纯 LVGL** | 唯一可用方案 |
 | 内存紧张 (< 4MB 空闲) | **A: 纯 LVGL** | 不需要 DMA buffer |
 
+### 9.6 180° 旋转性能实测结论
+
+**VGS 硬件旋转 180° 不适合局部刷新密集的 UI**。实测验证：
+
+| 场景 | 180° VGS FULL | 180° LVGL 软件旋转 DIRECT | 差异 |
+|------|:---:|:---:|:---:|
+| 静态页面 (0 脏区) | VGS rotate 4MB ~2ms | 0ms | VGS 多余开销 |
+| 局部刷新 (时钟秒针 50×50) | FULL re-render 4MB + VGS ~4ms | render 2.5KB ~0.3ms | **13x 差距** |
+| 列表滚动 (半屏) | FULL 4MB + VGS ~10ms | render 2MB ~8ms | 1.2x |
+| 全屏切换 | render 4MB + VGS ~17ms | render 4MB ~15ms | 1.1x |
+
+**根因**: VGS rotate 在 flush 时强制走 FULL 模式重绘全屏 800×1280 (4MB)，而 LVGL DIRECT 模式只渲染变化的脏区域。局部刷新越频繁，FULL 模式的代价越大。
+
+**结论**:
+- **180° 旋转 → 使用 LVGL 软件旋转 (`lv_display_set_rotation`)**。开销仅坐标取反 (`x'=w-x, y'=h-y`)，不到 1 CPU cycle/像素，且保留 DIRECT 模式的局部刷新优势。
+- **90°/270° 旋转 → 使用 VGS 硬件旋转**。横竖屏切换涉及 canvas 尺寸变化，VGS 硬件旋转是最佳选择。
+
 ### 9.6 关键约束
 
 - `xosfb_v2_rotate_blit` 的 `src_buf` 必须 DMA 内存
