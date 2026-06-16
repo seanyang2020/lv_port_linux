@@ -116,6 +116,9 @@ lvgljs.setBgColor(p, 0x34495E);
 lvgljs.setRadius(p, 8);
 ```
 
+默认全不透明（`opacity=255`）。如需半透明效果，显式设置
+`lvgljs.setOpacity(p, 200)`，但注意[旋转模式下的性能影响](#81-旋转模式下的半透明-widget)。
+
 ### 2.5 image — 图片
 
 ```javascript
@@ -319,7 +322,69 @@ for (var i = 0; i < 200; i++) {
 
 ---
 
-## 8. 常见问题
+## 8. 性能注意事项
+
+### 8.1 旋转模式下的半透明 Widget
+
+**现象**：`LV_ROTATION=180` 时 FPS 极低（2-4 FPS），不旋转时正常（30 FPS）。
+
+**根因**：旋转路径使用 FULL 模式（cached buffer + VGS2 rotate）。FULL 模式下，
+`bg_opa < 255`（半透明）的 widget 内容变化时，LVGL 需要重绘背景区域做 alpha 混合。
+如果半透明 widget 覆盖大面积（如全屏 panel），脏区会扩展到 **整个屏幕
+（1024 Kpx = 800×1280）**，每帧 LVGL 渲染耗时 ~290ms。
+
+不旋转时使用 DIRECT 模式（零拷贝），即使全屏渲染也足够快，不会暴露此问题。
+
+**复现条件**（必须同时满足）：
+1. `LV_ROTATION=180`（FULL 模式）
+2. Widget 设置了 `opacity < 255`（半透明）
+3. 半透明 widget 内部有**频繁更新**的子控件（如每秒更新的时钟）
+
+**解决方案**：
+```javascript
+// 方案 A：panel 设为全不透明（默认，推荐）
+lvgljs.setOpacity(panel, 255);
+
+// 方案 B：如果必须半透明 — 做预合成背景
+// 1. 初始化时把 panel 背景色直接设为目标颜色（不透明）
+lvgljs.setBgColor(panel, 0xD2E0EB);  // 目标视觉色
+// 2. 不用 setOpacity（保持默认 255）
+```
+
+**从 js_bridge 层面**：`js_panel()` 默认 `bg_opa` 已改为 `LV_OPA_100`（全不透明）。
+JS 显式调用 `setOpacity(xxx, <255)` 仍然生效，但开发者需了解上述性能代价。
+
+**适用于非旋转场景的半透明**：
+- 静态弹窗/菜单（只渲染一次）→ 无影响
+- 小面积半透明 label/btn（无 panel）→ 仅自身区域 invalidate，影响可忽略
+
+### 8.2 定时器与脏区控制
+
+每个 `setText` / `setStyle` 调用都会触发 LVGL 脏区标记。
+频繁更新的 widget 应考虑：
+
+```javascript
+// WRONG: 每秒更新 48 个 widget
+lvgljs.setInterval(1000, function() {
+    for (var i = 0; i < 42; i++) {
+        lvgljs.setText(cells[i], "text");       // 每个触发脏区
+        lvgljs.setBgColor(cells[i], 0x000000);  // 即使值没变！
+    }
+});
+
+// RIGHT: 只更新实际变化的 widget
+var lastVal = 0;
+lvgljs.setInterval(1000, function() {
+    if (newVal !== lastVal) {                   // 值没变就跳过
+        lvgljs.setText(label, newVal);
+        lastVal = newVal;
+    }
+});
+```
+
+---
+
+## 9. 常见问题
 
 ### Q: 定时器速度不稳定？
 **A**: 使用时间戳节流（见 7.3），不要依赖 setInterval 的精确性。
@@ -349,7 +414,7 @@ lvgljs.setFont(widget, 16);  // 使用内置字体
 |--------|---------|
 | label | 白色文字, Montserrat 16, 黑色背景上可见 |
 | btn | 8px 圆角, 阴影, 白色文字, 主题色背景 |
-| panel | 18px 圆角, 白色半透明背景, 无边框 |
+| panel | 18px 圆角, 白色全不透明背景, 无边框 |
 | switch | 默认 LVGL 主题样式 |
 | slider | 默认 LVGL 主题样式 |
 | image | 直接解码显示 PNG/JPG |

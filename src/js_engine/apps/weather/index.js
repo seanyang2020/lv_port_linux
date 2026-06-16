@@ -65,11 +65,11 @@ var calY=isLand?m+gap:m+wxH+gap, calH=isLand?700:W.h-calY-m;
 
 // Weather panel
 var wxPan = lvgljs.panel(m, m, panW, wxH);
-lvgljs.setBgColor(wxPan, 0xFFFFFF); lvgljs.setOpacity(wxPan, 200); lvgljs.setRadius(wxPan, 28);
+lvgljs.setBgColor(wxPan, 0xFFFFFF); lvgljs.setOpacity(wxPan, 255); lvgljs.setRadius(wxPan, 28);
 var dateLbl  = lvgljs.label("", 30, 30, wxPan);
-lvgljs.setTextColor(dateLbl, 0x172335); lvgljs.setFont(dateLbl, M22); lvgljs.setOpacity(dateLbl, 150);
+lvgljs.setTextColor(dateLbl, 0x172335); lvgljs.setFont(dateLbl, M22);
 var lunarLbl = lvgljs.label("", 220, 30, wxPan);
-lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, font); lvgljs.setOpacity(lunarLbl, 150);
+lvgljs.setTextColor(lunarLbl, 0x172335); lvgljs.setFont(lunarLbl, font);
 var timeLbl  = lvgljs.label("", 30, 86, wxPan);
 lvgljs.setTextColor(timeLbl, 0x000000); lvgljs.setFont(timeLbl, M36);
 var iconImg = lvgljs.image(icon(wx.icon), isLand?219:290, isLand?235:140, 160, 160, wxPan);
@@ -95,7 +95,7 @@ for (var j=0; j<fcLabels.length; j++) {
 
 // Calendar panel
 var calPan = lvgljs.panel(isLand?652:m, calY, panW, calH);
-lvgljs.setBgColor(calPan, 0xFFFFFF); lvgljs.setOpacity(calPan, 200); lvgljs.setRadius(calPan, 28);
+lvgljs.setBgColor(calPan, 0xFFFFFF); lvgljs.setOpacity(calPan, 255); lvgljs.setRadius(calPan, 28);
 var calTitle = lvgljs.label("", isLand?199:panW/2-60, 40, calPan);
 lvgljs.setTextColor(calTitle, 0x172335); lvgljs.setFont(calTitle, font);
 var weekHdr  = lvgljs.label(D.weekHdr, isLand?40:25, 90, calPan);
@@ -108,15 +108,20 @@ for (var row=0; row<6; row++)
 var hlLabel = lvgljs.label("", isLand?50:25, gy+6*rh+15, calPan);
 lvgljs.setTextColor(hlLabel, 0x666666); lvgljs.setFont(hlLabel, font);
 
-function updateAll() {
-    var now=new Date();
-    var y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
-    lvgljs.setText(dateLbl, D.fmtDate(y,m,d,now.getDay()));
-    var h=now.getHours(), mi=now.getMinutes(), s=now.getSeconds();
-    lvgljs.setText(timeLbl, (h<10?"0":"")+h+":"+(mi<10?"0":"")+mi+":"+(s<10?"0":"")+s);
-    lvgljs.setText(lunarLbl, D.fmtLunar(m,d,lunarDay(y,m,d)));
+// Track last-rendered calendar state to avoid redundant LVGL invalidations.
+// Each setText/setStyle call triggers dirty area → expensive VGS2 rotate per area.
+var gLastCalY = 0, gLastCalM = 0, gLastCalD = 0;
+var gLastHuangliIdx = -1;
 
+function updateCalendar(y, m, d) {
+    // Only redraw calendar when date actually changes (once per day or on first load)
+    if (y === gLastCalY && m === gLastCalM && d === gLastCalD) return;
+    gLastCalY = y; gLastCalM = m; gLastCalD = d;
+
+    lvgljs.setText(dateLbl, D.fmtDate(y,m,d,new Date(y,m-1,d).getDay()));
+    lvgljs.setText(lunarLbl, D.fmtLunar(m,d,lunarDay(y,m,d)));
     lvgljs.setText(calTitle, D.fmtCal(y,m));
+
     var swd=new Date(y,m-1,1).getDay(), dim=new Date(y,m,0).getDate();
     for (var i=0; i<42; i++) {
         var dn=i-swd+1;
@@ -135,10 +140,28 @@ function updateAll() {
             lvgljs.setBgColor(dayLabels[i], 0x000000); lvgljs.setOpacity(dayLabels[i], 0);
         }
     }
+
     var idx=(y+m+d)%8;
-    var yi=D.yi[idx], ji=D.yi[(idx+2)%8];
-    lvgljs.setText(hlLabel, D.fmtHuangli(yi,ji));
-    lvgljs.setText(wxUpdateLbl, "Updated: " + agoStr(wxUpdateTs));  // live "X ago"
+    if (idx !== gLastHuangliIdx) {
+        gLastHuangliIdx = idx;
+        var yi=D.yi[idx], ji=D.yi[(idx+2)%8];
+        lvgljs.setText(hlLabel, D.fmtHuangli(yi,ji));
+    }
+}
+
+// Per-second update: only the clock label (1 dirty area instead of 48+)
+function updateClock() {
+    var now=new Date();
+    var y=now.getFullYear(), m=now.getMonth()+1, d=now.getDate();
+    var h=now.getHours(), mi=now.getMinutes(), s=now.getSeconds();
+    lvgljs.setText(timeLbl, (h<10?"0":"")+h+":"+(mi<10?"0":"")+mi+":"+(s<10?"0":"")+s);
+
+    // Calendar redraw only when date changes (checked once per second, redraws ~once/day)
+    updateCalendar(y, m, d);
+
+    // "Updated: X ago" — update every 30s to further reduce dirty areas
+    if (s % 30 === 0)
+        lvgljs.setText(wxUpdateLbl, "Updated: " + agoStr(wxUpdateTs));
 }
 
 // ---- Weather cache & real API fetch ----
@@ -217,8 +240,9 @@ if (saved && saved.ts && (Date.now() - saved.ts) < 1800000) {
     fetchWeather();
 }
 lvgljs.setInterval(1800000, fetchWeather);
-updateAll();
-lvgljs.setInterval(1000, updateAll);
+lvgljs.toFront(closeImg);  // bring close button above both panels
+updateClock();
+lvgljs.setInterval(1000, updateClock);
 // "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
 lvgljs.print("Weather ready [" + L + "]");

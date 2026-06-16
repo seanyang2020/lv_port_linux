@@ -287,7 +287,7 @@ static JSValue js_panel(JSContext * C, JSValue T, int N, JSValue * A) {
     lv_obj_t * o = lv_obj_create(p);
     lv_obj_set_pos(o, x, y); lv_obj_set_size(o, w, h);
     lv_obj_set_style_bg_color(o, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(o, LV_OPA_80, 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_100, 0);
     lv_obj_set_style_radius(o, 18, 0);
     lv_obj_set_style_border_width(o, 0, 0);
     lv_obj_set_style_pad_all(o, 0, 0);
