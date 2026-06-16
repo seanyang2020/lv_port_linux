@@ -242,6 +242,7 @@ if (saved && saved.ts && (Date.now() - saved.ts) < 1800000) {
 lvgljs.setInterval(1800000, fetchWeather);
 lvgljs.toFront(closeImg);  // bring close button above both panels
 updateClock();
+lvgljs.setFPS(20);  // smooth UI, no need for 30fps on weather display
 lvgljs.setInterval(1000, updateClock);
 // "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
