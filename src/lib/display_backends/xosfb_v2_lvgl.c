@@ -28,10 +28,12 @@ typedef struct {
     xosfb_v2_dma_buf_t dma;
     uint8_t           *draw_buf;
     int                px_size;
-    int                fb_stride;   /* actual FB line stride (bytes) */
+    int                fb_stride;
     int                w, h;
     bool               use_vgs2;
-    bool               direct;      /* DIRECT mode (no flush copy needed) */
+    bool               hw_rotate;   /* VGS2 hardware rotation active */
+    int                hw_deg;      /* 90/180/270 */
+    bool               direct;
 } xosfb_v2_drv_t;
 
 static lv_display_t *init_xosfb_v2(void);
@@ -86,54 +88,85 @@ static lv_display_t *init_xosfb_v2(void)
                 w, h, drv->px_size * 8, caps, drv->use_vgs2,
                 drv->fb_stride, lvgl_stride, drv->direct);
 
-    /* ---- Buffer setup ---- */
+    /* ---- Rotation check ---- */
+    const char *rot_env = getenv("LV_ROTATION");
+    int rot_deg = rot_env ? atoi(rot_env) : 0;
+    if (rot_deg != 0 && rot_deg != 90 && rot_deg != 180 && rot_deg != 270) rot_deg = 0;
+    int hw_rotate_ok = (rot_deg != 0) && drv->use_vgs2
+                       && (caps & XOSFB_V2_CAP_ROTATE);
+
+    /* ---- Buffer setup: single decision, single allocation ---- */
     lv_display_t *disp = lv_display_create(w, h);
     lv_display_set_driver_data(disp, drv);
     lv_display_set_color_format(disp, LV_COLOR_FORMAT_ARGB8888);
 
-    if (drv->direct) {
-        /*
-         * DIRECT mode: LVGL renders straight to FB memory.
-         * Zero memcpy — flush only calls pan_display.
-         * TDE2 fill_rect can be used for background clears.
-         */
-        drv->draw_buf = xosfb_get_fb_ptr(drv->ctx);
-        uint32_t fb_bytes = drv->fb_stride * h; /* use actual FB stride * height */
-        lv_display_set_buffers(disp, drv->draw_buf, NULL, fb_bytes,
-                               LV_DISPLAY_RENDER_MODE_DIRECT);
-        LV_LOG_INFO("XOSFB-V2: DIRECT mode (zero-copy), fb=%p stride=%d",
-                    drv->draw_buf, drv->fb_stride);
-    } else if (drv->use_vgs2) {
-        /*
-         * FULL mode + DMA buffer: VGS2 blits LVGL buffer → FB.
-         * DMA required for VGS2 hardware access.
-         */
-        uint32_t buf_bytes = w * h * 4;
-        if (xosfb_v2_alloc_dma(drv->ctx, buf_bytes, &drv->dma) == 0) {
-            drv->draw_buf = drv->dma.virt_addr;
-            lv_display_set_buffers(disp, drv->draw_buf, NULL, buf_bytes,
-                                   LV_DISPLAY_RENDER_MODE_FULL);
-            LV_LOG_INFO("XOSFB-V2: FULL + VGS2 mode, dma=%p", drv->draw_buf);
+    /* Rotation strategy:
+     * - lv_display_set_rotation() → touch transform (always works)
+     * - VGS2 rotate_blit → display rotation (hardware)
+     * LVGL renders normally (un-rotated), VGS2 rotates in flush_cb. */
+    bool need_rotate = (rot_deg != 0);
+    bool use_hw_rotate = need_rotate && drv->use_vgs2
+                         && (caps & XOSFB_V2_CAP_ROTATE);
+    if (need_rotate) {
+        drv->direct = false;
+        /* Touch transform only — LVGL handles this correctly */
+        lv_display_rotation_t lr = LV_DISPLAY_ROTATION_0;
+        if (rot_deg == 90)  lr = LV_DISPLAY_ROTATION_90;
+        if (rot_deg == 180) lr = LV_DISPLAY_ROTATION_180;
+        if (rot_deg == 270) lr = LV_DISPLAY_ROTATION_270;
+        lv_display_set_rotation(disp, lr);
+        if (use_hw_rotate) {
+            drv->hw_rotate = true;  /* confirmed by DMA success below */
+            drv->hw_deg = rot_deg;
         } else {
-            drv->use_vgs2 = false; /* fall through */
+            LV_LOG_USER("XOSFB-V2: rotation %d° (LVGL SW + touch)", rot_deg);
         }
+    } else {
+        LV_LOG_USER("XOSFB-V2: rotation NONE");
     }
 
-    if (!drv->direct && !drv->use_vgs2) {
-        /*
-         * Fallback: FULL mode CPU memcpy (safe, works everywhere).
-         * Neither DIRECT (stride mismatch) nor VGS2 (no driver) available.
-         */
-        uint32_t buf_bytes = w * h * drv->px_size;
-        drv->draw_buf = lv_malloc(buf_bytes);
-        LV_ASSERT_MALLOC(drv->draw_buf);
-        lv_display_set_buffers(disp, drv->draw_buf, NULL, buf_bytes,
-                               LV_DISPLAY_RENDER_MODE_FULL);
-        LV_LOG_INFO("XOSFB-V2: FULL + CPU fallback, buf=%p", drv->draw_buf);
+    /* ---- Buffer setup: single allocation ---- */
+    if (!drv->draw_buf) {
+        if (drv->direct) {
+            /* Path B: DIRECT mode (zero-copy, no rotation) */
+            drv->draw_buf = xosfb_get_fb_ptr(drv->ctx);
+            lv_display_set_buffers(disp, drv->draw_buf, NULL,
+                                   drv->fb_stride * h,
+                                   LV_DISPLAY_RENDER_MODE_DIRECT);
+            LV_LOG_INFO("XOSFB-V2: DIRECT mode");
+        } else if (drv->use_vgs2) {
+            /* Path C: VGS blit (DMA FULL, no rotation) */
+            uint32_t buf_bytes = w * h * 4;
+            if (xosfb_v2_alloc_dma(drv->ctx, buf_bytes, &drv->dma) == 0) {
+                drv->draw_buf = drv->dma.virt_addr;
+                lv_display_set_buffers(disp, drv->draw_buf, NULL, buf_bytes,
+                                       LV_DISPLAY_RENDER_MODE_FULL);
+                LV_LOG_INFO("XOSFB-V2: FULL + VGS blit");
+            } else {
+                drv->use_vgs2 = false;
+            }
+        }
+        if (!drv->draw_buf) {
+            /* Path D: CPU fallback */
+            uint32_t buf_bytes = w * h * drv->px_size;
+            drv->draw_buf = lv_malloc(buf_bytes);
+            LV_ASSERT_MALLOC(drv->draw_buf);
+            lv_display_set_buffers(disp, drv->draw_buf, NULL, buf_bytes,
+                                   LV_DISPLAY_RENDER_MODE_FULL);
+            LV_LOG_INFO("XOSFB-V2: FULL + CPU fallback");
+        }
     }
 
     lv_display_set_flush_cb(disp, flush_cb);
     lv_display_add_event_cb(disp, del_cb, LV_EVENT_DELETE, NULL);
+
+    /* HW rotate requires DMA — disable if allocation failed */
+    if (drv->hw_rotate && !drv->dma.virt_addr) {
+        LV_LOG_WARN("XOSFB-V2: DMA failed → rotation fallback to LVGL SW only");
+        drv->hw_rotate = false;
+    }
+    if (drv->hw_rotate)
+        LV_LOG_USER("XOSFB-V2: rotation %d° (VGS2 HW + LVGL touch)", drv->hw_deg);
 
     LV_LOG_INFO("XOSFB-V2 ready");
     return disp;
@@ -155,17 +188,31 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
     int w = lv_area_get_width(area), h = lv_area_get_height(area);
     if (w <= 0 || h <= 0) { lv_display_flush_ready(disp); return; }
 
-    if (drv->direct) {
-        /* DIRECT mode: LVGL already wrote to FB. No copy needed.
-         * Optionally use TDE2 fill for full-screen background on first frame. */
+    /* Only last flush carries complete frame (FULL mode semantics) */
+    if (!lv_display_flush_is_last(disp)) { lv_display_flush_ready(disp); return; }
+
+    if (drv->hw_rotate) {
+        /* VGS2 hardware rotation: LVGL renders + touch via set_rotation,
+         * VGS2 rotates the output buffer to FB. */
+        xosfb_v2_rotation_t r = XOSFB_V2_ROTATE_0;
+        if (drv->hw_deg == 90)       r = XOSFB_V2_ROTATE_90;
+        else if (drv->hw_deg == 180) r = XOSFB_V2_ROTATE_180;
+        else if (drv->hw_deg == 270) r = XOSFB_V2_ROTATE_270;
+        xosfb_v2_rotate_blit(drv->ctx, &drv->dma, drv->w, drv->h,
+                             XOSFB_FMT_ARGB8888, 0, 0, r);
+    } else if (drv->direct) {
     } else if (drv->use_vgs2) {
-        /* VGS2 hardware blit: DMA buffer → FB */
-        xosfb_v2_blit_desc_t d = {
-            .src_buf = px, .src_w = w, .src_h = h,
-            .src_stride = drv->w, .src_fmt = XOSFB_FMT_ARGB8888,
-            .dst_x = area->x1, .dst_y = area->y1, .dst_w = w, .dst_h = h,
-        };
-        xosfb_v2_blit(drv->ctx, &d);
+        /* VGS2 blit only when format conversion needed (ARGB8888→native FB fmt).
+         * Same-format ARGB8888→ARGB8888 is rejected by VGS2 CSC hardware. */
+        uint8_t *fb = xosfb_get_fb_ptr(drv->ctx);
+        int fb_stride = drv->fb_stride;
+        int src_stride = drv->w * 4;
+        if (fb && fb_stride == src_stride && area->x1 == 0)
+            memcpy(fb, &px[area->y1 * src_stride], h * src_stride);
+        else if (fb)
+            for (int y = 0; y < h; y++)
+                memcpy(&fb[(area->y1+y)*fb_stride + area->x1*drv->px_size],
+                       &px[y*src_stride], w * drv->px_size);
     } else {
         /* FULL + CPU fallback: memcpy LVGL buffer → FB (same format, no conversion) */
         uint8_t *fb = xosfb_get_fb_ptr(drv->ctx);

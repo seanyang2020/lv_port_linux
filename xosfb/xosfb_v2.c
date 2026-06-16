@@ -26,6 +26,7 @@
 #include "fh_common.h"
 #include "fh_system_mpi.h"
 #include "fh_system_mpipara.h"
+#include "vmm_api.h"
 #include "fh_vb_mpi.h"
 #include "fh_vb_mpipara.h"
 #include "fh_vo_mpi.h"
@@ -94,8 +95,23 @@ static void set_bitfields(struct fb_var_screeninfo *var, xosfb_pixel_format_t fm
 static int  vgs_pixel_fmt(xosfb_pixel_format_t fmt);
 
 /**********************
+ *   DEBUG LOGGING
+ * **********************/
+
+static uint32_t g_dbg_mask = 0;
+
+void xosfb_v2_set_debug(uint32_t mask)
+{
+    g_dbg_mask = mask;
+}
+
+#define DBG(cat, fmt, ...) do { \
+    if (g_dbg_mask & (cat)) fprintf(stderr, "xosfb_v2: " fmt "\n", ##__VA_ARGS__); \
+} while(0)
+
+/**********************
  *   GLOBAL FUNCTIONS
- **********************/
+ * **********************/
 
 xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
 {
@@ -225,6 +241,7 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
     ret = tde_init(ctx);
     if (ret == 0) {
         ctx->caps |= (XOSFB_V2_CAP_FILL | XOSFB_V2_CAP_COPY | XOSFB_V2_CAP_BLEND);
+        DBG(XOSFB_V2_DBG_INIT, "TDE2 opened, caps=0x%x", ctx->caps);
     } else {
         fprintf(stderr, "xosfb_v2_init: TDE2 init failed (%d), "
                 "fill/copy/blend unavailable\n", ret);
@@ -234,6 +251,7 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
     ret = vgs_init(ctx);
     if (ret == 0) {
         ctx->caps |= (XOSFB_V2_CAP_SCALE | XOSFB_V2_CAP_CONVERT | XOSFB_V2_CAP_ROTATE);
+        DBG(XOSFB_V2_DBG_INIT, "VGS opened, caps=0x%x", ctx->caps);
     } else {
         fprintf(stderr, "xosfb_v2_init: VGS init failed (%d), "
                 "scale/convert/rotate unavailable\n", ret);
@@ -241,6 +259,8 @@ xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt)
 
     printf("xosfb_v2: init complete, %dx%d bpp=%d caps=0x%x fmt=%d\n",
            width, height, ctx->bpp, ctx->caps, fmt);
+    DBG(XOSFB_V2_DBG_INIT, "ctx=%p fb=%p phy=0x%lx line=%d size=%zu",
+        (void*)ctx, ctx->fbp, ctx->fb_phy, ctx->line_length, ctx->screensize);
 
     return ctx;
 
@@ -372,6 +392,7 @@ int xosfb_v2_fill_rect(xosfb_ctx_t *ctx, int x, int y, int w, int h, uint32_t co
         return -EIO;
     }
 
+    DBG(XOSFB_V2_DBG_TDE2, "fill_rect(%d,%d %dx%d) color=0x%x", x, y, w, h, color);
     return 0;
 }
 
@@ -439,6 +460,8 @@ int xosfb_v2_copy_rect(xosfb_ctx_t *ctx,
         return -EIO;
     }
 
+    DBG(XOSFB_V2_DBG_TDE2, "copy_rect src(%d,%d %dx%d) -> dst(%d,%d)",
+        src_x, src_y, w, h, dst_x, dst_y);
     return 0;
 }
 
@@ -501,6 +524,9 @@ int xosfb_v2_blit(xosfb_ctx_t *ctx, const xosfb_v2_blit_desc_t *desc)
         fprintf(stderr, "xosfb_v2_blit: EndJob failed (%d)\n", ret);
         return -EIO;
     }
+    DBG(XOSFB_V2_DBG_VGS, "blit src(%dx%d fmt=%d) -> dst(%d,%d %dx%d)",
+        desc->src_w, desc->src_h, desc->src_fmt,
+        desc->dst_x, desc->dst_y, desc->dst_w, desc->dst_h);
     return 0;
 }
 
@@ -509,51 +535,86 @@ int xosfb_v2_blit(xosfb_ctx_t *ctx, const xosfb_v2_blit_desc_t *desc)
  * ================================================================ */
 
 int xosfb_v2_rotate_blit(xosfb_ctx_t *ctx,
-        const void *src_buf, int src_w, int src_h,
+        const xosfb_v2_dma_buf_t *src, int src_w, int src_h,
         xosfb_pixel_format_t src_fmt,
         int dst_x, int dst_y, xosfb_v2_rotation_t rotation)
 {
-    if (!ctx || !src_buf)                      return -EINVAL;
+    if (!ctx || !src || !src->virt_addr)       return -EINVAL;
     if (!(ctx->caps & XOSFB_V2_CAP_ROTATE))    return -ENODEV;
     if (src_w <= 0 || src_h <= 0)              return -EINVAL;
 
-    VGS_TASK_ATTR_S task;
-    int ret;
+    /*
+     * qm10xd VGS rotates within the canvas — the canvas Width/Height
+     * describe the raw buffer geometry and the crop offsets describe
+     * the active area.  After 90°/270° rotation, the active area
+     * swaps (h × w) but the canvas stays (w × h).  VGS places the
+     * rotated pixels at (OffsetLeft, OffsetTop) within the canvas.
+     *
+     * The stride for both src and dst must stay as the canvas stride,
+     * NOT recalculated for the rotated dimensions.
+     */
+    int px_size    = (src_fmt == XOSFB_FMT_ARGB8888) ? 4 : 2;
+    int src_stride = src_w * px_size;
+    int fb_stride  = ctx->line_length;
 
+    VGS_TASK_ATTR_S task;
     memset(&task, 0, sizeof(task));
 
+    /*
+     * qm10xd VGS rotate operates within the canvas.  Offsets describe
+     * the active region; Width/Height/Stride describe the raw buffer.
+     * All crop offsets are set to 0 (full canvas = full image).
+     *
+     * The qm10xd board uses this exact pattern (see qua_gl_transform).
+     */
+
     /* Source */
-    task.stImgIn.stVFrame.u32Width      = src_w;
-    task.stImgIn.stVFrame.u32Height     = src_h;
-    task.stImgIn.stVFrame.u32Field      = VIDEO_FIELD_FRAME;
-    task.stImgIn.stVFrame.enPixelFormat = vgs_pixel_fmt(src_fmt);
-    task.stImgIn.stVFrame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    task.stImgIn.stVFrame.u32Width       = src_w;
+    task.stImgIn.stVFrame.u32Height      = src_h;
+    task.stImgIn.stVFrame.u32Field       = VIDEO_FIELD_FRAME;
+    task.stImgIn.stVFrame.enPixelFormat  = vgs_pixel_fmt(src_fmt);
+    task.stImgIn.stVFrame.enVideoFormat  = VIDEO_FORMAT_LINEAR;
     task.stImgIn.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
-    task.stImgIn.stVFrame.pVirAddr[0]   = (FH_VOID *)src_buf;
-    task.stImgIn.stVFrame.u32Stride[0]  = src_w *
-        (src_fmt == XOSFB_FMT_ARGB8888 ? 4 : 2);
+    task.stImgIn.stVFrame.u32PhyAddr[0]  = (FH_UINT32)src->phy_addr;
+    task.stImgIn.stVFrame.pVirAddr[0]    = (FH_VOID *)src->virt_addr;
+    task.stImgIn.stVFrame.u32Stride[0]   = src_stride;
+    task.stImgIn.stVFrame.s16OffsetLeft  = 0;
+    task.stImgIn.stVFrame.s16OffsetTop   = 0;
+    task.stImgIn.stVFrame.s16OffsetRight = 0;
+    task.stImgIn.stVFrame.s16OffsetBottom = 0;
 
-    /* Destination (FB) */
-    task.stImgOut.stVFrame.u32Width      = ctx->width;
-    task.stImgOut.stVFrame.u32Height     = ctx->height;
-    task.stImgOut.stVFrame.u32Field      = VIDEO_FIELD_FRAME;
-    task.stImgOut.stVFrame.enPixelFormat = vgs_pixel_fmt(ctx->fmt);
-    task.stImgOut.stVFrame.enVideoFormat = VIDEO_FORMAT_LINEAR;
+    /* Destination: FB canvas. All crop offsets 0 (full canvas).
+     * VGS places rotated pixels within the canvas automatically. */
+    task.stImgOut.stVFrame.u32Width       = ctx->width;
+    task.stImgOut.stVFrame.u32Height      = ctx->height;
+    task.stImgOut.stVFrame.u32Field       = VIDEO_FIELD_FRAME;
+    task.stImgOut.stVFrame.enPixelFormat  = vgs_pixel_fmt(ctx->fmt);
+    task.stImgOut.stVFrame.enVideoFormat  = VIDEO_FORMAT_LINEAR;
     task.stImgOut.stVFrame.enCompressMode = COMPRESS_MODE_NONE;
-    task.stImgOut.stVFrame.u32PhyAddr[0] = (FH_UINT32)ctx->fb_phy;
-    task.stImgOut.stVFrame.pVirAddr[0]   = (FH_VOID *)ctx->fbp;
-    task.stImgOut.stVFrame.u32Stride[0]  = ctx->line_length;
-    task.stImgOut.stVFrame.s16OffsetLeft   = dst_x;
-    task.stImgOut.stVFrame.s16OffsetTop    = dst_y;
+    task.stImgOut.stVFrame.u32PhyAddr[0]  = (FH_UINT32)ctx->fb_phy;
+    task.stImgOut.stVFrame.pVirAddr[0]    = (FH_VOID *)ctx->fbp;
+    task.stImgOut.stVFrame.u32Stride[0]   = fb_stride;
+    task.stImgOut.stVFrame.s16OffsetLeft  = 0;
+    task.stImgOut.stVFrame.s16OffsetTop   = 0;
+    task.stImgOut.stVFrame.s16OffsetRight = 0;
+    task.stImgOut.stVFrame.s16OffsetBottom = 0;
 
-    if (rotation == XOSFB_V2_ROTATE_90 || rotation == XOSFB_V2_ROTATE_270) {
-        task.stImgOut.stVFrame.u32Width  = src_h;
-        task.stImgOut.stVFrame.u32Height = src_w;
+    if (g_dbg_mask & XOSFB_V2_DBG_VGS) {
+        fprintf(stderr, "xosfb_v2_rotate_blit: src=%dx%d str=%d fmt=%d phy=0x%x "
+                "dst=%dx%d str=%d fmt=%d phy=0x%x rot=%d\n",
+                task.stImgIn.stVFrame.u32Width, task.stImgIn.stVFrame.u32Height,
+                task.stImgIn.stVFrame.u32Stride[0],
+                task.stImgIn.stVFrame.enPixelFormat,
+                task.stImgIn.stVFrame.u32PhyAddr[0],
+                task.stImgOut.stVFrame.u32Width, task.stImgOut.stVFrame.u32Height,
+                task.stImgOut.stVFrame.u32Stride[0],
+                task.stImgOut.stVFrame.enPixelFormat,
+                task.stImgOut.stVFrame.u32PhyAddr[0],
+                rotation);
     }
 
-    ret = FH_VGS_DoRotate(&task, (FH_ROTATE_OPS)rotation);
-    if (ret != FH_SUCCESS) {
-        fprintf(stderr, "xosfb_v2_rotate_blit: FH_VGS_DoRotate failed (%d)\n", ret);
+    if (FH_VGS_DoRotate(&task, (FH_ROTATE_OPS)rotation) != FH_SUCCESS) {
+        fprintf(stderr, "xosfb_v2_rotate_blit: FH_VGS_DoRotate failed\n");
         return -EIO;
     }
     return 0;
@@ -569,77 +630,84 @@ int xosfb_v2_alloc_dma(xosfb_ctx_t *ctx, unsigned int size, xosfb_v2_dma_buf_t *
     VB_BLK  blk;
 
     if (!ctx || !buf || size == 0) return -EINVAL;
-
     memset(buf, 0, sizeof(*buf));
 
-    /* Try existing pools first (auto-select via VB_INVALID_POOLID) */
+    /* Tier 1: try existing VB pools */
     blk = FH_VB_GetBlock(VB_INVALID_POOLID, size, NULL);
-    if (blk == 0) {
-        /* Existing pools can't satisfy this size — create a dedicated pool.
-         * This happens when MPP was pre-initialized with small-block pools. */
-        pool = FH_VB_CreatePool(size, 1, "xosfb_v2_dma");
-        if (pool == VB_INVALID_POOLID) {
-            fprintf(stderr, "xosfb_v2_alloc_dma: cannot allocate %u bytes "
-                    "(existing pools too small, create pool failed)\n", size);
-            return -ENOMEM;
+    if (blk != 0) {
+        buf->phy_addr  = FH_VB_Handle2PhysAddr(blk);
+        buf->size      = size;
+        pool = FH_VB_Handle2PoolId(blk);
+        FH_VB_GetBlkVirAddr(pool, buf->phy_addr, (FH_VOID **)&buf->virt_addr);
+        if (buf->phy_addr && buf->virt_addr) {
+            if (ctx->dma_blk_cnt < XOSFB_V2_MAX_DMA_BLKS) {
+                ctx->dma_blks[ctx->dma_blk_cnt++] = blk;
+                DBG(XOSFB_V2_DBG_DMA, "alloc %uB via VB pool, phy=0x%lx", size, buf->phy_addr);
+                return 0;
+            }
         }
-        printf("xosfb_v2: created DMA pool id=%d size=%u\n", pool, size);
+        FH_VB_ReleaseBlock(blk);
+    }
 
-        /* Retry allocation from the new pool */
+    /* Tier 2: create a dedicated VB pool and retry */
+    pool = FH_VB_CreatePool(size, 1, "xosfb_dma");
+    if (pool != VB_INVALID_POOLID) {
         blk = FH_VB_GetBlock(pool, size, NULL);
-        if (blk == 0) {
-            fprintf(stderr, "xosfb_v2_alloc_dma: GetBlock from new pool failed\n");
-            FH_VB_DestroyPool(pool);
-            return -ENOMEM;
+        if (blk != 0) {
+            buf->phy_addr  = FH_VB_Handle2PhysAddr(blk);
+            buf->size      = size;
+            FH_VB_GetBlkVirAddr(pool, buf->phy_addr, (FH_VOID **)&buf->virt_addr);
+            if (buf->phy_addr && buf->virt_addr) {
+                if (ctx->dma_blk_cnt < XOSFB_V2_MAX_DMA_BLKS) {
+                    ctx->dma_blks[ctx->dma_blk_cnt++] = blk;
+                    DBG(XOSFB_V2_DBG_DMA, "alloc %uB via CreatePool id=%d phy=0x%lx",
+                        size, pool, buf->phy_addr);
+                    return 0;
+                }
+            }
+            FH_VB_ReleaseBlock(blk);
+        }
+        FH_VB_DestroyPool(pool);
+    }
+
+    /* Tier 3: direct MMZ allocation via VMM (bypasses VB pools) */
+    {
+        FH_UINT32 u32Phy = 0;
+        FH_VOID  *pVirt = NULL;
+        if (FH_SYS_VmmAlloc(&u32Phy, &pVirt, NULL, NULL, size) == FH_SUCCESS
+            && u32Phy && pVirt) {
+            buf->phy_addr  = u32Phy;
+            buf->virt_addr = pVirt;
+            buf->size      = size;
+            DBG(XOSFB_V2_DBG_DMA, "alloc %uB via VmmAlloc phy=0x%x virt=%p",
+                size, u32Phy, pVirt);
+            return 0;
         }
     }
 
-    buf->phy_addr  = FH_VB_Handle2PhysAddr(blk);
-    buf->size      = size;
-
-    /* Get virtual address */
-    pool = FH_VB_Handle2PoolId(blk);
-    FH_VB_GetBlkVirAddr(pool, buf->phy_addr, (FH_VOID **)&buf->virt_addr);
-
-    if (!buf->phy_addr || !buf->virt_addr) {
-        fprintf(stderr, "xosfb_v2_alloc_dma: invalid addr from VB block\n");
-        FH_VB_ReleaseBlock(blk);
-        return -ENOMEM;
-    }
-
-    /* Track block handle for cleanup */
-    if (ctx->dma_blk_cnt < XOSFB_V2_MAX_DMA_BLKS) {
-        ctx->dma_blks[ctx->dma_blk_cnt++] = blk;
-    } else {
-        fprintf(stderr, "xosfb_v2_alloc_dma: dma_blks table full (max %d)\n",
-                XOSFB_V2_MAX_DMA_BLKS);
-        FH_VB_ReleaseBlock(blk);
-        return -ENOMEM;
-    }
-
-    return 0;
+    fprintf(stderr, "xosfb_v2_alloc_dma: all methods failed for %u bytes\n", size);
+    return -ENOMEM;
 }
 
 void xosfb_v2_free_dma(xosfb_ctx_t *ctx, xosfb_v2_dma_buf_t *buf)
 {
     int i;
-
     if (!ctx || !buf || !buf->virt_addr) return;
 
-    /* Find and release the VB block matching this buffer's phys addr */
+    /* Check VB block table first */
     for (i = 0; i < ctx->dma_blk_cnt; i++) {
         VB_BLK blk = ctx->dma_blks[i];
         if (FH_VB_Handle2PhysAddr(blk) == (FH_PHYADDR)buf->phy_addr) {
             FH_VB_ReleaseBlock(blk);
-            /* Remove from tracking array */
             ctx->dma_blks[i] = ctx->dma_blks[--ctx->dma_blk_cnt];
             memset(buf, 0, sizeof(*buf));
             return;
         }
     }
 
-    fprintf(stderr, "xosfb_v2_free_dma: block not found for phy=0x%lx\n",
-            buf->phy_addr);
+    /* Not a VB block — must be a VmmAlloc allocation */
+    FH_SYS_VmmFree((FH_UINT32)buf->phy_addr);
+    memset(buf, 0, sizeof(*buf));
 }
 
 /* ================================================================
@@ -910,6 +978,7 @@ void xosfb_pan_display(xosfb_ctx_t *ctx)
     if (!ctx || ctx->fd < 0) return;
 
     ctx->var.yoffset = 0;
+    DBG(XOSFB_V2_DBG_FB, "pan_display");
     if (ioctl(ctx->fd, FBIOPAN_DISPLAY, &ctx->var) < 0) {
         perror("xosfb_pan_display: FBIOPAN_DISPLAY");
     }

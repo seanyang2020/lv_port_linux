@@ -10,11 +10,9 @@ include ../../Makefile.param
 MPI_LIBS := $(REL_LIB)/libmpi.a
 TARGET   := libxosfb_v2.a
 
-# v1 core
-XOSFB_V1_SRC := xosfb.c
-XOSFB_V1_OBJ := $(XOSFB_V1_SRC:%.c=%.o)
-
-# v2 extension (hardware acceleration)
+# v2 self-contained source (includes v1 helpers + v2 hardware acceleration)
+# xosfb.o is NOT used — v1 helper functions are inlined in xosfb_v2.c
+# to avoid the SAMPLE_COMM_VO_StartDev dependency chain.
 XOSFB_V2_SRC := xosfb_v2.c
 XOSFB_V2_OBJ := $(XOSFB_V2_SRC:%.c=%.o)
 
@@ -40,14 +38,14 @@ all: $(TARGET)
 %.o: %.c
 	$(CC) -c $(CFLAGS) -o $@ $<
 
-# Combined static library: xosfb v1 + v2 + libmpi.a
-$(TARGET): $(XOSFB_V1_OBJ) $(XOSFB_V2_OBJ)
+# Combined static library: xosfb_v2.o + libmpi.a
+$(TARGET): $(XOSFB_V2_OBJ)
 	@echo "Creating combined $@ ..."
 	@rm -rf .combine $(TARGET)
 	@mkdir -p .combine
 	@( \
 		cd .combine; \
-		$(AR) rcs tmp1.a $(addprefix ../,$(XOSFB_V1_OBJ) $(XOSFB_V2_OBJ)); \
+		$(AR) rcs tmp1.a $(addprefix ../,$(XOSFB_V2_OBJ)); \
 		$(AR) x tmp1.a; \
 		$(AR) x $(MPI_LIBS); \
 		$(AR) rcs ../$(TARGET) *.o; \
@@ -57,7 +55,6 @@ $(TARGET): $(XOSFB_V1_OBJ) $(XOSFB_V2_OBJ)
 	@rm -rf .combine
 
 clean:
-	@rm -f $(XOSFB_V1_OBJ)
 	@rm -f $(XOSFB_V2_OBJ)
 	@rm -f $(TARGET)
 	@rm -rf .combine

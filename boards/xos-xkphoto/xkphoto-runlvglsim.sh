@@ -45,6 +45,7 @@ export BAIDU_DEVICE_ID=$(sean-token.py key baidupan AppID)
 adb shell "echo export BAIDU_CLIENT_ID=${BAIDU_CLIENT_ID} >> /tmp/.env"
 adb shell "echo export BAIDU_CLIENT_SECRET=${BAIDU_CLIENT_SECRET} >> /tmp/.env"
 adb shell "echo export BAIDU_DEVICE_ID=${BAIDU_DEVICE_ID} >> /tmp/.env"
+adb shell "echo export LV_ROTATION=180 >> /tmp/.env"
 adb shell chmod +x /tmp/.env
 adb shell pkill qxosui 
 adb shell touch /tmp/.NO_BIND_WDT2QXOSUI

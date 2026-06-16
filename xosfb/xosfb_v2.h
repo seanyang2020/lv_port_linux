@@ -87,6 +87,18 @@ typedef struct {
 xosfb_ctx_t *xosfb_v2_init(int width, int height, xosfb_pixel_format_t fmt);
 void xosfb_v2_exit(xosfb_ctx_t *ctx);
 uint32_t xosfb_v2_get_caps(xosfb_ctx_t *ctx);
+/** Debug categories (bitmask -- combine with |). */
+typedef enum {
+	XOSFB_V2_DBG_INIT   = 1 << 0,	/**< Init / exit flow               */
+	XOSFB_V2_DBG_TDE2   = 1 << 1,	/**< fill_rect / copy_rect           */
+	XOSFB_V2_DBG_VGS    = 1 << 2,	/**< blit / rotate_blit              */
+	XOSFB_V2_DBG_DMA    = 1 << 3,	/**< alloc_dma / free_dma            */
+	XOSFB_V2_DBG_FB     = 1 << 4,	/**< pan_display / show              */
+	XOSFB_V2_DBG_ALL    = 0x1F,	/**< All categories (default: 0)     */
+} xosfb_v2_dbg_t;
+
+/** Set debug log mask (default: 0 = silent). */
+void xosfb_v2_set_debug(uint32_t mask);
 
 /**********************
  *  TDE2: hardware fill & copy (always available if TDE2 driver loaded)
@@ -103,7 +115,7 @@ int xosfb_v2_copy_rect(xosfb_ctx_t *ctx,
 
 int xosfb_v2_blit(xosfb_ctx_t *ctx, const xosfb_v2_blit_desc_t *desc);
 int xosfb_v2_rotate_blit(xosfb_ctx_t *ctx,
-        const void *src_buf, int src_w, int src_h,
+        const xosfb_v2_dma_buf_t *src, int src_w, int src_h,
         xosfb_pixel_format_t src_fmt,
         int dst_x, int dst_y, xosfb_v2_rotation_t rotation);
 

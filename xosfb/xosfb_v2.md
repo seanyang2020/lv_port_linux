@@ -445,6 +445,76 @@ FB (竖屏 800×1280, 物理 LCD 方向)
 - LVGL `lv_display_set_rotation` 和 VGS `xosfb_v2_rotate_blit` 的旋转方向一致 (0/1/2/3 = 0°/90°/180°/270°)
 - 组合使用时，确保 LVGL 渲染 buffer 尺寸与 `rotate_blit` 的 src_w/src_h 匹配
 
+### 9.7 VGS 旋转完整排障记录
+
+旋转功能经历了 6 个阶段的问题和修复，记录了 API 设计和使用两方面的经验。
+
+**阶段 1: VGS 版本错误 — `FH_VGS_V2_Init` 失败**
+
+```
+Open vgs(vgs2) fail! FH_VGS_V2_Init failed (-1606451184)
+```
+
+原因: qm10xd 使用 VGS **v1** API (`fh_vgs_mpi.h` / `FH_VGS_Open`)，不是 VGS v2 (`fh_vgs2_mpi.h` / `FH_VGS_V2_Init`)。修复: 切换到 VGS v1 的 `FH_VGS_Open` / `FH_VGS_AddFmtConvertTask` / `FH_VGS_DoRotate`。
+
+**阶段 2: Canvas size 被错误修改 — 0x2 错误**
+
+```
+FH_VGS_DoRotate returned 0x2 (FH_ERR_VGS_INVALID_PARAM)
+```
+
+原因: VGS rotate 在 canvas 内操作，`u32Width`/`u32Height` 描述的是 buffer 的原始几何尺寸，**不能**在旋转时改变。旋转后的像素通过 crop offset 定位。修复: dst canvas 保持 `ctx->width × ctx->height` 不变，所有 crop offset 置 0。
+
+教训: **硬件 API 的 Width/Height 和用户理解的"图像尺寸"可能不是同一个概念**——VGS 中它们是 canvas 描述符，不是像素区域。
+
+**阶段 3: DMA 分配失败**
+
+```
+MPI_VB_ERROR: FH_VB_GetBlock CALL VB_GET_BLOCK_CTRL fail
+```
+
+原因: MPP 被外部框架预初始化，VB 池块固定 32KB，无法满足 4MB 请求。修复: 三级回退 — `FH_VB_GetBlock` → `FH_VB_CreatePool` → `FH_SYS_VmmAlloc` (绕过 VB)。
+
+**阶段 4: `phy_addr` 传递错误 — 最难定位的 0x2**
+
+```
+xosfb_v2_rotate_blit: src phy=0xffd2eafc  ← 这是虚拟地址!
+实际 DMA phy_addr = 0x4348e000            ← 这才是物理地址
+```
+
+原因: API 从 `xosfb_v2_rotate_blit(ctx, const void *src_buf, ...)` 改为 `xosfb_v2_rotate_blit(ctx, const xosfb_v2_dma_buf_t *src, ...)` 后，调用方未同步更新，仍传 `px` (LVGL buffer 虚拟地址)。C 编译器不做类型检查 (`void *` → `struct *` 隐式转换)，`src->phy_addr` 读到的是 buffer 首字节的数据内容。
+
+修复: 调用方改为 `xosfb_v2_rotate_blit(ctx, &drv->dma, ...)`。
+
+教训: **API 参数从裸指针升级为结构体时，C 语言的弱类型检查不会报错**。加一个 debug log（通过 `xosfb_v2_set_debug(1)` 开启）打印 `phy_addr` 值可以在 30 秒内定位此类问题。
+
+**阶段 5: 开启调试日志**
+
+新增 API `xosfb_v2_set_debug(int enable)`，默认关闭。开启后 `xosfb_v2_rotate_blit` 打印完整参数到 stderr，格式:
+
+```
+xosfb_v2_rotate_blit: src=800x1280 str=3200 fmt=10 phy=0x4348e000 dst=800x1280 str=3200 fmt=10 phy=0x42104000 rot=2
+```
+
+使用: `xosfb_v2_set_debug(1)` 在 init 后调用一次即可。
+
+**阶段 6: 旋转方案定型**
+
+最终方案: **LVGL 软件旋转坐标 + VGS 硬件旋转帧** (与 qm10xd board 相同):
+- `lv_display_set_rotation(disp, 180°)` — LVGL 处理坐标和触控
+- `xosfb_v2_rotate_blit(ctx, &drv->dma, ...)` — VGS 旋转 LVGL 输出到 FB
+- DMA buffer 用 VmmAlloc 分配 (绕过 VB 池限制)
+
+旋转 API 参数速查:
+
+| 字段 | 要求 | 验证方法 |
+|------|------|---------|
+| `src->phy_addr` | 必须是真实的 MMZ 物理地址 | `xosfb_v2_set_debug(1)` 打印验证 |
+| `src->virt_addr` | DMA buffer 虚拟地址 | 不能是 `px` / `lv_malloc` 指针 |
+| `src_w × src_h` | buffer 的逻辑尺寸 | 与 LVGL 渲染分辨率一致 |
+| `dst` Width/Height | FB canvas 尺寸 | 保持不变 (ctx->width × ctx->height) |
+| crop offsets | 全部置 0 | 全 canvas 有效区域
+
 ---
 
 ## 10. 集成经验总结
@@ -541,7 +611,72 @@ drv->direct = (drv->fb_stride == lvgl_stride);  // stride 匹配才开 DIRECT
 
 ---
 
-## 11. 参考
+## 12. 调试日志
+
+`xosfb_v2_set_debug(mask)` 控制各级别的运行时日志输出（默认全部关闭）。
+
+### 12.1 日志类别
+
+| 位 | 宏 | 覆盖函数 |
+|:--:|------|---------|
+| 0 | `XOSFB_V2_DBG_INIT` | `xosfb_v2_init`, `xosfb_v2_exit` |
+| 1 | `XOSFB_V2_DBG_TDE2` | `xosfb_v2_fill_rect`, `xosfb_v2_copy_rect` |
+| 2 | `XOSFB_V2_DBG_VGS` | `xosfb_v2_blit`, `xosfb_v2_rotate_blit` |
+| 3 | `XOSFB_V2_DBG_DMA` | `xosfb_v2_alloc_dma`, `xosfb_v2_free_dma` |
+| 4 | `XOSFB_V2_DBG_FB` | `xosfb_pan_display`, `xosfb_show` |
+
+### 12.2 使用示例
+
+```c
+// 只开 VGS 日志，排查 blit/rotate 参数
+xosfb_v2_set_debug(XOSFB_V2_DBG_VGS);
+
+// 开 init + DMA，排查初始化问题
+xosfb_v2_set_debug(XOSFB_V2_DBG_INIT | XOSFB_V2_DBG_DMA);
+
+// 开全部
+xosfb_v2_set_debug(XOSFB_V2_DBG_ALL);
+
+// 关闭
+xosfb_v2_set_debug(0);
+```
+
+### 12.3 日志输出示例
+
+```
+# XOSFB_V2_DBG_INIT:
+xosfb_v2: TDE2 opened, caps=0x63
+xosfb_v2: VGS opened, caps=0x7f
+xosfb_v2: ctx=0x1234 fb=0xb6500000 phy=0x42104000 line=3200 size=4096000
+
+# XOSFB_V2_DBG_TDE2:
+xosfb_v2: fill_rect(0,0 800x480) color=0xff0000ff
+xosfb_v2: copy_rect src(0,0 100x100) -> dst(200,200)
+
+# XOSFB_V2_DBG_VGS:
+xosfb_v2: blit src(800x1280 fmt=0) -> dst(0,0 800x1280)
+xosfb_v2_rotate_blit: src=800x1280 str=3200 fmt=10 phy=0x4348e000 dst=800x1280 str=3200 fmt=10 phy=0x42104000 rot=2
+
+# XOSFB_V2_DBG_DMA:
+xosfb_v2: alloc 4096000B via VmmAlloc phy=0x4348e000 virt=0xb60d4000
+
+# XOSFB_V2_DBG_FB:
+xosfb_v2: pan_display
+```
+
+### 12.4 典型排查场景
+
+| 场景 | 推荐 mask |
+|------|----------|
+| blit/rotate 返回 -ENODEV / -EIO | `XOSFB_V2_DBG_VGS` |
+| 画面更新延迟、掉帧 | `XOSFB_V2_DBG_FB | XOSFB_V2_DBG_TDE2` |
+| DMA 分配失败、内存不足 | `XOSFB_V2_DBG_DMA | XOSFB_V2_DBG_INIT` |
+| 初始化后立即崩溃 | `XOSFB_V2_DBG_INIT` |
+| 全部排查 | `XOSFB_V2_DBG_ALL` |
+
+---
+
+## 13. 参考
 
 | 资源 | 说明 |
 |------|------|
