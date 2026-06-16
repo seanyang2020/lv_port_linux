@@ -309,5 +309,24 @@ lvgljs.onPress(function() {
     }
 });
 
+// Time-based schedule: auto on at schedule_on, off at schedule_off
+function checkSchedule() {
+    if (!CFG.screen.schedule_enabled) return;
+    var onParts = CFG.screen.schedule_on.split(":");
+    var offParts = CFG.screen.schedule_off.split(":");
+    var onHM = parseInt(onParts[0]) * 60 + parseInt(onParts[1]);
+    var offHM = parseInt(offParts[0]) * 60 + parseInt(offParts[1]);
+    var now = new Date();
+    var hm = now.getHours() * 60 + now.getMinutes();
+
+    if (hm >= onHM && hm < offHM) {
+        if (!screenOn) { wakeScreen(); lvgljs.print("Schedule: auto-wake " + CFG.screen.schedule_on); }
+    } else {
+        if (screenOn)  { dimScreen();  lvgljs.print("Schedule: auto-dim " + CFG.screen.schedule_off); }
+    }
+}
+lvgljs.setInterval(60000, checkSchedule); // check every minute
+checkSchedule(); // immediate check on start
+
 scheduleDim();
 lvgljs.print("Weather ready [" + L + "]");

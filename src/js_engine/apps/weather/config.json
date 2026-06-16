@@ -3,7 +3,10 @@
         "auto_off_minutes": 5,
         "auto_off_enabled": true,
         "wake_timeout_seconds": 15,
-        "double_tap_wake": true
+        "double_tap_wake": true,
+        "schedule_on": "07:30",
+        "schedule_off": "23:30",
+        "schedule_enabled": true
     },
     "weather": {
         "refresh_minutes": 30,
