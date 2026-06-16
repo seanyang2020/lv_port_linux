@@ -27,6 +27,56 @@ LV_ROTATION=180 pipeline:
 2. **VGS2 rotate_blit** dirty area `dma → fb` at 180° position (hardware)
 3. **xosfb_pan_display** on last flush only
 
+### Memory overhead
+
+| | Rotation (180°, FULL) | No rotation (DIRECT) |
+|---|---|---|
+| **Render mode** | FULL | DIRECT |
+| **Render target** | `lv_malloc` (~4 MB, cached) | FB mmap (0 extra) |
+| **VGS2 source** | DMA buffer (~4 MB, uncached) | N/A |
+| **Total extra** | **实测 ~6 MB** | **0** |
+| **Render path** | LVGL→cached→memcpy→DMA→VGS2→FB | LVGL→FB (zero-copy) |
+
+Without rotation, DIRECT mode renders zero-copy to the FB — no extra
+buffers needed. VGS2 is not involved in the rendering pipeline.
+
+#### 实测 ~6 MB 而非理论 ~8 MB 的原因
+
+理论上两个 buffer 各 800×1280×4 ≈ 3.9 MB，合计 ~8 MB。实际测量增加约 **6 MB**：
+
+1. **DMA buffer 来自 MMZ/VB 预分配池**：`xosfb_v2_alloc_dma` 从 MPP 初始化时
+   预分配的 VB 池中划出，不消耗系统 DRAM。启动日志中
+   `FH_VB_SetConf failed, MPP may already be initialized` 表明 MPP 已占用
+   这部分内存，DMA 分配只是从现有池中切分。
+
+2. **cached buffer 来自系统 malloc**：`lv_malloc` → `malloc(4 MB)`，这是唯一
+   新增的系统内存消耗（本项目使用 `LV_STDLIB_CLIB`，直接调用标准 C `malloc`）。
+
+3. **剩余 ~2 MB**：DMA buffer 的 CPU 虚拟地址映射（页表）、xosfb_v2 内部分配
+   开销等，合计约 2 MB。
+
+总增长 = 4 MB（cached, system heap）+ 2 MB（DMA 映射 + 开销）= **~6 MB**。
+
+#### Why two buffers?
+
+- **Cached buffer cannot be eliminated**: LVGL must render to cached memory
+  for acceptable performance. Rendering to uncached DMA takes ~192ms/full-screen
+  vs ~10ms for cached. The 4 MB is the minimum viable render target.
+
+- **DMA buffer cannot be eliminated**: VGS2 `rotate_blit` requires a source
+  buffer in MMZ/DMA memory pool. The FB physical address is NOT in this pool
+  (confirmed by `-EINVAL` from VGS2). Without a separate DMA buffer, we cannot
+  use VGS2 hardware rotation at all — would force full-CPU rotation at ~119ms
+  per full screen.
+
+- **Could merge the two**: No. The draw buffer needs to be cached (CPU writes);
+  the DMA buffer needs to be uncached (VGS2 reads). Same memory cannot be both
+  cached and uncached simultaneously.
+
+**Impact**: +8 MB DRAM usage when `LV_ROTATION` is set. Acceptable on qm10xd
+platforms (≥128 MB RAM). If memory is critically tight, the non-rotation
+DIRECT path uses 0 extra memory.
+
 ### Why two buffers?
 
 VGS2 `rotate_blit` requires a DMA (physically contiguous, MMZ-pool) source buffer.
