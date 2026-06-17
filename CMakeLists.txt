@@ -593,8 +593,13 @@ if(LV_USE_JS_LOADER_ENABLED AND JSLOADER_BUILD_DIR)
     )
 
     # jsroot directory (contains apps/ and config.json)
+    # Override with -DJSROOT_DIR=/mnt/sdcard/jsroot for device builds
+    if(NOT DEFINED JSROOT_DIR)
+        set(JSROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/config/jsroot"
+            CACHE PATH "Path to jsroot directory at runtime")
+    endif()
     list(APPEND JSLOADER_DEFS
-        JSROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/jsroot"
+        JSROOT_DIR="${JSROOT_DIR}"
     )
 
     # When using jsloader, suppress the old inline JS engine to avoid

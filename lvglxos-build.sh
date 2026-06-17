@@ -49,7 +49,8 @@ case "${1:-help}" in
             -DCMAKE_SYSTEM_PROCESSOR=arm \
             -DWAMR_BUILD_TARGET=ARM \
             -DWAMR_BUILD_INVOKE_NATIVE_GENERAL=1 \
-            -DJS_APPS_DIR="/mnt/sdcard/js-apps"
+            -DJS_APPS_DIR="/mnt/sdcard/js-apps" \
+            -DJSROOT_DIR="/mnt/sdcard/jsroot"
         make -C "$BUILD_DIR" -j$(nproc) lvglsim
         echo "Build complete: $BIN"
         ;;
