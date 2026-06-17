@@ -2,5 +2,5 @@
   "js_apps_path": "./config/js-apps",
   "tab_cycle": false,
   "tab_cycle_interval": 5000,
-  "tab_order": ["JS-Loader", "Profile", "Analytics", "Shop", "BaiduPan"]
+  "tab_order": ["JS-Loader", "JS-Apps", "Profile", "Analytics", "Shop", "BaiduPan"]
 }
