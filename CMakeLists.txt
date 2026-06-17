@@ -631,6 +631,8 @@ if(LV_USE_JS_LOADER_ENABLED)
     target_link_options(lvglsim PRIVATE -Wl,--allow-shlib-undefined)
     # Export host symbols so bridge .so can resolve LVGL (liblvgl.a is static)
     target_link_options(lvglsim PRIVATE -Wl,--export-dynamic)
+    # RUNPATH so dynamic linker finds jsloader .so at runtime
+    target_link_options(lvglsim PRIVATE -Wl,-rpath,${JSROOT_DIR}/lib)
 
     # Push feature macros onto LVGL submodule targets
     target_compile_definitions(lvgl_demos PRIVATE LV_USE_JS_ENGINE=1 LV_USE_JS_LOADER=1)
