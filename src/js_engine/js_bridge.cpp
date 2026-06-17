@@ -544,7 +544,6 @@ static void global_press_cb(lv_event_t * e) {
 }
 static void global_release_cb(lv_event_t * e) {
     (void)e;
-    if (!g_indev_pressed) return;
     g_indev_pressed = false;
     fire_callback(g_release_cbid);
 }

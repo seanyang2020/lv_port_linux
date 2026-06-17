@@ -21,6 +21,7 @@
 #if LV_USE_JS_ENGINE
 
 #include "js_bridge.h"
+#include "config_util.h"
 #include "lvgl/lvgl.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,6 +121,85 @@ static int scan_apps(void)
     return g_ctx.app_count;
 }
 
+/* ---- Auto-start config helpers ---- */
+
+/**
+ * Read auto_start_app from JS_APPS_DIR/config.json into buf.
+ * buf will contain "none" if the file is missing, corrupt, or the
+ * key is absent.
+ */
+static void read_auto_start_config(char * buf, size_t buf_size)
+{
+    char cfg_path[512];
+    snprintf(cfg_path, sizeof(cfg_path), JS_APPS_DIR "/config.json");
+
+    cJSON * json = config_json_read(cfg_path);
+    const char * val = config_get_str(json, "auto_start_app", "none");
+    strncpy(buf, val, buf_size - 1);
+    buf[buf_size - 1] = '\0';
+    if (json) cJSON_Delete(json);
+}
+
+/**
+ * Persist auto_start_app to JS_APPS_DIR/config.json.
+ */
+static void save_auto_start_config(const char * app_name)
+{
+    char cfg_path[512];
+    snprintf(cfg_path, sizeof(cfg_path), JS_APPS_DIR "/config.json");
+
+    cJSON * json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "auto_start_app", app_name);
+    if (!config_json_write(cfg_path, json)) {
+        LV_LOG_WARN("[js_tab] failed to write %s", cfg_path);
+    }
+    cJSON_Delete(json);
+}
+
+/* ---- Dropdown callback ---- */
+
+static void auto_start_dd_event_cb(lv_event_t * e)
+{
+    lv_obj_t * dd = lv_event_get_target(e);
+    char buf[MAX_APP_NAME_LEN];
+    lv_dropdown_get_selected_str(dd, buf, sizeof(buf));
+
+    LV_LOG_USER("[js_tab] auto-start set to '%s'", buf);
+    save_auto_start_config(buf);
+}
+
+/* ---- Auto-start async callback ---- */
+
+static void auto_start_launch_cb(void * user_data)
+{
+    int idx = (int)(intptr_t)user_data;
+    launch_app(idx);
+}
+
+/**
+ * Schedule auto-start: if an app is configured, defer-launch it
+ * after the UI has fully initialized.
+ */
+static void schedule_auto_start(void)
+{
+    char auto_start[MAX_APP_NAME_LEN];
+    read_auto_start_config(auto_start, sizeof(auto_start));
+    if (strcmp(auto_start, "none") == 0) return;
+
+    /* Find the app index */
+    for (int i = 0; i < g_ctx.app_count; i++) {
+        if (strcmp(auto_start, g_ctx.apps[i].name) == 0) {
+            LV_LOG_USER("[js_tab] auto-starting '%s' (idx=%d)",
+                        auto_start, i);
+            lv_async_call(auto_start_launch_cb, (void *)(intptr_t)i);
+            return;
+        }
+    }
+
+    LV_LOG_WARN("[js_tab] auto-start app '%s' not found, skipping",
+                auto_start);
+}
+
 /**
  * Create the app-list UI (called once when the tab is first shown).
  */
@@ -149,6 +229,57 @@ static void create_list_ui(void)
             "Place JS bundles in:\n" JS_APPS_DIR "/<app_name>/index.js");
         lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         return;
+    }
+
+    /* ---- Auto-start dropdown ---- */
+    {
+        /* Container row: label + dropdown */
+        lv_obj_t * row = lv_obj_create(parent);
+        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+
+        lv_obj_t * dd_label = lv_label_create(row);
+        lv_label_set_text_static(dd_label, "Auto-start:");
+
+        lv_obj_t * dd = lv_dropdown_create(row);
+        lv_obj_set_width(dd, 200);
+
+        /* Build dropdown options: "none" + every scanned app */
+        char options[MAX_APPS * MAX_APP_NAME_LEN + 64];
+        snprintf(options, sizeof(options), "none");
+        for (int i = 0; i < g_ctx.app_count; i++) {
+            size_t len = strlen(options);
+            snprintf(options + len, sizeof(options) - len,
+                     "\n%s", g_ctx.apps[i].name);
+        }
+        lv_dropdown_set_options(dd, options);
+
+        /* Select the configured auto-start app (or "none") */
+        char auto_start_buf[MAX_APP_NAME_LEN];
+        read_auto_start_config(auto_start_buf, sizeof(auto_start_buf));
+        int sel_idx = 0;
+        for (int i = 0; i < g_ctx.app_count; i++) {
+            if (strcmp(auto_start_buf, g_ctx.apps[i].name) == 0) {
+                sel_idx = i + 1;  /* +1 because "none" is index 0 */
+                break;
+            }
+        }
+        lv_dropdown_set_selected(dd, (uint32_t)sel_idx);
+
+        lv_obj_add_event_cb(dd, auto_start_dd_event_cb,
+                            LV_EVENT_VALUE_CHANGED, NULL);
+
+        /* Check: if configured app no longer exists, revert to "none" */
+        if (sel_idx == 0 && strcmp(auto_start_buf, "none") != 0) {
+            LV_LOG_WARN("[js_tab] auto-start app '%s' not found, "
+                        "defaulting to 'none'", auto_start_buf);
+            save_auto_start_config("none");
+        }
     }
 
     /* Scrollable list of apps — fills remaining space */
@@ -187,6 +318,15 @@ static void list_btn_event_cb(lv_event_t * e)
 static void launch_app(int idx)
 {
     if (idx < 0 || idx >= g_ctx.app_count) return;
+
+    /* Guard: don't launch a second app while one is already running.
+     * The list screen is hidden during JS execution, but programmatic
+     * triggers (auto-start, future shortcuts) could attempt a re-launch. */
+    if (g_ctx.js_screen) {
+        LV_LOG_WARN("[js_tab] launch_app(%d) blocked — session active",
+                    idx);
+        return;
+    }
 
     g_ctx.current_app_idx = idx;
     js_app_t * app = &g_ctx.apps[idx];
@@ -317,10 +457,11 @@ static int last_app_count = -1;
 void lv_js_tab_refresh(void)
 {
     if (!g_ctx.list_screen) return;
-    int prev = last_app_count;
     scan_apps();
-    if (g_ctx.app_count == prev) return; /* unchanged */
-    LV_LOG_USER("[js_tab] apps changed %d→%d, rebuilding", prev, g_ctx.app_count);
+    /* Always rebuild — app directory contents may have changed
+     * (rename, swap) even if the count stays the same.  The list
+     * is small so the rebuild cost is negligible. */
+    LV_LOG_USER("[js_tab] refresh, %d app(s)", g_ctx.app_count);
     last_app_count = g_ctx.app_count;
     lv_obj_clean(g_ctx.list_screen);
     create_list_ui();
@@ -334,6 +475,8 @@ lv_obj_t * lv_js_tab_create(lv_obj_t * parent)
     scan_apps();
     create_list_ui();
     last_app_count = g_ctx.app_count;
+
+    schedule_auto_start();
 
     return parent;
 }

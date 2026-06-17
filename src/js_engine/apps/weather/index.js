@@ -165,7 +165,7 @@ function updateClock() {
 }
 
 // ---- Weather cache & real API fetch ----
-var WX_CACHE = __dirname + "/weather_cache.json";
+var WX_CACHE = __dirname + "/weather.json";
 var wxUpdateTs = 0;
 var wxUpdateLbl = lvgljs.label("", isLand?235:310, isLand?440:330, wxPan);
 lvgljs.setTextColor(wxUpdateLbl, 0x888888); lvgljs.setFont(wxUpdateLbl, 14);
@@ -178,8 +178,9 @@ function loadWxCache() {
 }
 function saveWxCache() {
     var c = { temp: wx.temp, cond: wx.cond, icon: wx.icon,
-              fc: fc, ts: wxUpdateTs, city: wx.city };
-    lvgljs.writeFile(WX_CACHE, JSON.stringify(c));
+              fc: fc, ts: wxUpdateTs, city: wx.city,
+              screen: CFG.screen };
+    lvgljs.writeFile(WX_CACHE, JSON.stringify(c, null, 2));
 }
 
 function agoStr(ts) {
@@ -244,22 +245,18 @@ lvgljs.toFront(closeImg);  // bring close button above both panels
 updateClock();
 lvgljs.setFPS(20);  // smooth UI, no need for 30fps on weather display
 lvgljs.setInterval(1000, updateClock);
-// "Updated: X ago" refreshes every second via updateAll → refreshWeatherUI → agoStr
 lvgljs.hideBackButton();
-// ---- Screen power management (config.json, all disabled by default) ----
+// ---- Screen power management (from weather.json, all disabled by default) ----
 var CFG = { screen: { auto_off_enabled: false, double_tap_wake: false, schedule_enabled: false } };
 var hasConfig = false;
-try {
-    var raw = lvgljs.readFile(__dirname + "/config.json");
-    if (raw) { var j = JSON.parse(raw); if (j.screen) { CFG.screen = j.screen; hasConfig = true; } }
-} catch(e) {}
+if (saved && saved.screen) { CFG.screen = saved.screen; hasConfig = true; }
 
 var dimOverlay = null, screenOn = true, lastActivity = Date.now(), dimTimer = null;
 var lastTap = 0;
 
 // Only create overlay & start timers if config exists with features enabled
 if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || CFG.screen.schedule_enabled)) {
-    lvgljs.print("Power mgmt: config loaded, features enabled");
+    lvgljs.print("Power mgmt: " + JSON.stringify(CFG.screen));
 
     dimOverlay = lvgljs.panel(0, 0, W.w, W.h);
     lvgljs.setBgColor(dimOverlay, 0x000000);
@@ -315,8 +312,9 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
     // Double-tap toggles screen on/off
     // Uses onRelease — C-side stateful debounce guarantees exactly one
     // callback per physical tap (no time-based minimum needed).
-    var toggleCooldown = 0;
+    var tapCnt = 0, toggleCooldown = 0;
     lvgljs.onRelease(function() {
+        lvgljs.print("tap#" + (++tapCnt) + " dt=" + (Date.now() - lastTap) + "ms cd=" + (Date.now() - toggleCooldown) + "ms");
         lastActivity = Date.now();
         if (!CFG.screen.double_tap_wake) return;
         var now = Date.now();
