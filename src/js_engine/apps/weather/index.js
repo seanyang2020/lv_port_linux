@@ -285,25 +285,45 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
     function scheduleDim() {
         if (dimTimer) { lvgljs.clearInterval(dimTimer); dimTimer = null; }
         if (!CFG.screen.auto_off_enabled) return;
-        var interval = screenOn ? CFG.screen.auto_off_minutes * 60000 : 10000;
+        // Check every 10s when on, every 1s when off (for prompt wake)
+        var interval = screenOn ? 10000 : 1000;
         dimTimer = lvgljs.setInterval(interval, function() {
-            var timeout = screenOn ? CFG.screen.auto_off_minutes * 60000
-                                   : (CFG.screen.wake_timeout_seconds || 15) * 1000;
-            if (Date.now() - lastActivity >= timeout) dimScreen();
+            if (screenOn) {
+                // Auto-dim: never during schedule ON window
+                if (CFG.screen.schedule_enabled && inScheduleWindow()) return;
+                if (Date.now() - lastActivity >= CFG.screen.auto_off_minutes * 60000)
+                    dimScreen();
+            } else {
+                // Auto-wake: ONLY during schedule ON window
+                if (!CFG.screen.schedule_enabled || !inScheduleWindow()) return;
+                if (Date.now() - lastActivity >= (CFG.screen.wake_timeout_seconds || 15) * 1000)
+                    wakeScreen();
+            }
         });
     }
 
-    // Double-tap toggles screen on/off (1s cooldown after toggle)
-    var toggleCooldown = 0, tapCount = 0;
-    lvgljs.onPress(function() {
+    // Check if current time is within the schedule ON window
+    function inScheduleWindow() {
+        var onP = CFG.screen.schedule_on.split(":");
+        var offP = CFG.screen.schedule_off.split(":");
+        var onHM = parseInt(onP[0])*60 + parseInt(onP[1]);
+        var offHM = parseInt(offP[0])*60 + parseInt(offP[1]);
+        var now = new Date(), hm = now.getHours()*60 + now.getMinutes();
+        return hm >= onHM && hm < offHM;
+    }
+
+    // Double-tap toggles screen on/off
+    // Uses onRelease — C-side stateful debounce guarantees exactly one
+    // callback per physical tap (no time-based minimum needed).
+    var toggleCooldown = 0;
+    lvgljs.onRelease(function() {
         lastActivity = Date.now();
         if (!CFG.screen.double_tap_wake) return;
         var now = Date.now();
-        if (now - toggleCooldown < 1000) return;  // cooldown
-        tapCount++;
+        if (now - toggleCooldown < 1000) return;
         if (now - lastTap < 500 && lastTap > 0) {
-            if (screenOn) { dimScreen(); lvgljs.print("Dbl-tap #"+tapCount+": dim"); }
-            else          { wakeScreen(); lvgljs.print("Dbl-tap #"+tapCount+": wake"); }
+            if (screenOn) { dimScreen(); lvgljs.print("Dbl-tap: dim"); }
+            else          { wakeScreen(); lvgljs.print("Dbl-tap: wake"); }
             lastTap = 0;
             toggleCooldown = now;
         } else {
@@ -314,15 +334,9 @@ if (hasConfig && (CFG.screen.auto_off_enabled || CFG.screen.double_tap_wake || C
     // Schedule timer
     if (CFG.screen.schedule_enabled) {
         function checkSchedule() {
-            var onP = CFG.screen.schedule_on.split(":");
-            var offP = CFG.screen.schedule_off.split(":");
-            var onHM = parseInt(onP[0])*60 + parseInt(onP[1]);
-            var offHM = parseInt(offP[0])*60 + parseInt(offP[1]);
-            var now = new Date(), hm = now.getHours()*60 + now.getMinutes();
-            if (hm >= onHM && hm < offHM) {
+            if (inScheduleWindow()) {
                 if (!screenOn) { wakeScreen(); lvgljs.print("Schedule: wake "+CFG.screen.schedule_on); }
             } else {
-                // Only dim if screen was previously on (don't dim on cold start)
                 if (screenOn && lastActivity > 0) { dimScreen(); lvgljs.print("Schedule: dim "+CFG.screen.schedule_off); }
             }
         }

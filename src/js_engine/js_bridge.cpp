@@ -529,8 +529,25 @@ static JSValue js_hide_back_btn(JSContext * C, JSValue T, int N, JSValue * A) {
 /* ---- global press/release (for games) ---- */
 static int  g_press_cbid = -1;
 static int  g_release_cbid = -1;
-static void global_press_cb(lv_event_t * e) { (void)e; fire_callback(g_press_cbid); }
-static void global_release_cb(lv_event_t * e) { (void)e; fire_callback(g_release_cbid); }
+static bool g_indev_pressed = false;
+
+/* Stateful debounce: only fire callback on the FIRST press/release in
+ * each press-release cycle.  Some indevs fire LV_EVENT_PRESSED multiple
+ * times per physical tap (pointer+button caps, multi-indev, etc.).
+ * A simple time window (50ms) can still block legitimate fast double-taps;
+ * state tracking is exact — one callback per physical gesture. */
+static void global_press_cb(lv_event_t * e) {
+    (void)e;
+    if (g_indev_pressed) return;
+    g_indev_pressed = true;
+    fire_callback(g_press_cbid);
+}
+static void global_release_cb(lv_event_t * e) {
+    (void)e;
+    if (!g_indev_pressed) return;
+    g_indev_pressed = false;
+    fire_callback(g_release_cbid);
+}
 static JSValue js_on_press(JSContext * C, JSValue T, int N, JSValue * A) {
     (void)T; if (N<1||!JS_IsFunction(C,A[0])) return JS_UNDEFINED;
     if (g_press_cbid < 0) {
@@ -933,9 +950,20 @@ void js_engine_cleanup(void) {
     TJS_FreeRuntime(g_rt);
     g_rt = NULL; g_js_ctx = NULL; g_inited = false;
 
-    /* 5. Reset all state */
+    /* 5. Restore backlight if it was dimmed by the app */
+    if (g_bl_saved > 0) {
+        bl_detect();
+        char bp[320]; snprintf(bp, sizeof(bp), "%s/brightness", g_bl_path);
+        FILE *fp = fopen(bp, "w");
+        if (fp) { fprintf(fp, "%d\n", g_bl_saved); fclose(fp); }
+        LV_LOG_USER("[js_engine] backlight restored to %d", g_bl_saved);
+        g_bl_saved = -1;
+    }
+
+    /* 6. Reset all state */
     g_widget_count = 0; g_cb_count = 0;
     g_press_cbid = g_release_cbid = -1;
+    g_indev_pressed = false;
     memset(g_widgets, 0, sizeof(g_widgets));
     memset(g_callbacks, 0, sizeof(g_callbacks));
     memset(g_timers, 0, sizeof(g_timers));
