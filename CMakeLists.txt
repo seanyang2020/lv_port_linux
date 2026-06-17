@@ -528,13 +528,108 @@ if (LV_USE_JS_ENGINE_ENABLED)
 
 endif()
 
+# ---- JS Loader (external libjsloader.so — alternative to inline JS engine) ----
+# Read LV_USE_JS_LOADER from the LVGL config defaults file
+set(JSLOADER_CONFIG_FILE "${LV_CONF_DEFAULTS_PATH}")
+if(EXISTS "${JSLOADER_CONFIG_FILE}")
+    file(STRINGS "${JSLOADER_CONFIG_FILE}" _jsloader_line
+         REGEX "^LV_USE_JS_LOADER[ \t]+")
+    if(_jsloader_line)
+        string(REGEX MATCH "[0-9]+" _jsloader_val "${_jsloader_line}")
+        if(_jsloader_val EQUAL 1)
+            set(LV_USE_JS_LOADER_ENABLED ON)
+        endif()
+    endif()
+endif()
+
+# Path to lv_jsloader source tree (for headers) and build directory (for .so)
+set(JSLOADER_SRC_DIR "" CACHE PATH "Path to lv_jsloader source root")
+set(JSLOADER_BUILD_DIR "" CACHE PATH "Path to lv_jsloader build directory")
+
+# Auto-detect JSLOADER_SRC_DIR relative to lv_port_linux
+if(NOT JSLOADER_SRC_DIR)
+    set(_candidate "${CMAKE_CURRENT_SOURCE_DIR}/../lv_jsloader")
+    if(EXISTS "${_candidate}/src/loader/js_loader.h")
+        set(JSLOADER_SRC_DIR "${_candidate}")
+    endif()
+endif()
+if(NOT JSLOADER_BUILD_DIR AND JSLOADER_SRC_DIR)
+    set(_candidate "${JSLOADER_SRC_DIR}/build")
+    if(EXISTS "${_candidate}/libjsloader.so")
+        set(JSLOADER_BUILD_DIR "${_candidate}")
+    endif()
+endif()
+
+if(LV_USE_JS_LOADER_ENABLED AND JSLOADER_BUILD_DIR)
+    message(STATUS "JS Loader: src=${JSLOADER_SRC_DIR}  build=${JSLOADER_BUILD_DIR}")
+
+    # Still need LV_USE_JS_ENGINE for LVGL guards
+    add_compile_definitions(LV_USE_JS_ENGINE=1)
+    add_compile_definitions(LV_USE_JS_LOADER=1)
+
+    # Enable C++ (bridge is C++)
+    enable_language(CXX)
+    set(CMAKE_CXX_STANDARD 14)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    # JS Loader tab wrapper source
+    list(APPEND JSLOADER_TAB_SRC
+        src/js_loader/js_loader_tab.c
+    )
+
+    # Headers from lv_jsloader source tree
+    list(APPEND JSLOADER_INC
+        ${JSLOADER_SRC_DIR}/src/loader
+        ${JSLOADER_SRC_DIR}/src/bridge_common
+        ${JSLOADER_SRC_DIR}/src/bridge/lvgl_v9
+        ${JSLOADER_SRC_DIR}/src/tab
+    )
+
+    # Pre-built shared libraries
+    list(APPEND JSLOADER_LIBS
+        ${JSLOADER_BUILD_DIR}/libjsloader.so
+        ${JSLOADER_BUILD_DIR}/liblvgljs_bridge.so
+        ${JSLOADER_BUILD_DIR}/libjs_tjs.so
+    )
+
+    # jsroot directory (contains apps/ and config.json)
+    list(APPEND JSLOADER_DEFS
+        JSROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/jsroot"
+    )
+
+    # When using jsloader, suppress the old inline JS engine to avoid
+    # duplicate symbols (lv_js_tab_create, js_engine_init, etc.).
+    set(JS_ENGINE_SRC "")
+    set(JS_ENGINE_LIBS "")
+    set(JS_ENGINE_INC "")
+    set(JS_ENGINE_DEFS "")
+
+elseif(LV_USE_JS_LOADER_ENABLED)
+    message(WARNING "JS Loader enabled but libjsloader.so not found at ${JSLOADER_BUILD_DIR}")
+    message(WARNING "Build lv_jsloader first: cd ../lv_jsloader && mkdir build && cd build && cmake .. && make")
+    set(LV_USE_JS_LOADER_ENABLED OFF)
+endif()
+
 add_executable(lvglsim
     src/main.c
     src/baidu_pan/baidu_oauth.c
     ${JS_ENGINE_SRC}
+    ${JSLOADER_TAB_SRC}
 )
 
-if (LV_USE_JS_ENGINE_ENABLED)
+if(LV_USE_JS_LOADER_ENABLED)
+    target_include_directories(lvglsim PRIVATE ${JSLOADER_INC})
+    target_compile_definitions(lvglsim PRIVATE ${JSLOADER_DEFS})
+    target_link_libraries(lvglsim ${JSLOADER_LIBS})
+
+    # Allow unresolved LVGL symbols in bridge .so (provided by host)
+    target_link_options(lvglsim PRIVATE -Wl,--allow-shlib-undefined)
+
+    # Push feature macros onto LVGL submodule targets
+    target_compile_definitions(lvgl_demos PRIVATE LV_USE_JS_ENGINE=1 LV_USE_JS_LOADER=1)
+    target_compile_definitions(lvgl PRIVATE LV_USE_JS_ENGINE=1)
+
+elseif(LV_USE_JS_ENGINE_ENABLED)
     target_include_directories(lvglsim PRIVATE ${JS_ENGINE_INC})
     target_compile_definitions(lvglsim PRIVATE ${JS_ENGINE_DEFS})
     target_link_libraries(lvglsim ${JS_ENGINE_LIBS})
