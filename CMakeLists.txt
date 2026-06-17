@@ -624,6 +624,8 @@ if(LV_USE_JS_LOADER_ENABLED)
 
     # Allow unresolved LVGL symbols in bridge .so (provided by host)
     target_link_options(lvglsim PRIVATE -Wl,--allow-shlib-undefined)
+    # Export host symbols so bridge .so can resolve LVGL (liblvgl.a is static)
+    target_link_options(lvglsim PRIVATE -Wl,--export-dynamic)
 
     # Push feature macros onto LVGL submodule targets
     target_compile_definitions(lvgl_demos PRIVATE LV_USE_JS_ENGINE=1 LV_USE_JS_LOADER=1)
@@ -643,8 +645,14 @@ elseif(LV_USE_JS_ENGINE_ENABLED)
     target_compile_definitions(lvgl PRIVATE LV_USE_JS_ENGINE=1)
 endif()
 
-# Repeat lvgl_linux to resolve circular dependency with lvgl
-target_link_libraries(lvglsim lvgl_linux lvgl lvgl_linux ${PKG_CONFIG_LIB})
+# Repeat lvgl_linux to resolve circular dependency with lvgl.
+# Wrap lvgl in --whole-archive so ALL LVGL symbols (fonts, widgets, etc.)
+# are exported from the lvglsim executable.  Without this, the linker
+# strips symbols only used by dynamically loaded .so plugins (e.g.
+# liblvgljs_bridge.so referencing lv_font_montserrat_48).
+target_link_libraries(lvglsim lvgl_linux
+    -Wl,--whole-archive lvgl -Wl,--no-whole-archive
+    lvgl_linux ${PKG_CONFIG_LIB})
 
 if(WERROR)
     target_compile_options(lvglsim PRIVATE -Werror)
