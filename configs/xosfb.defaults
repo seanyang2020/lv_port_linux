@@ -90,6 +90,7 @@ LV_FONT_FMT_TXT_LARGE   1
 
 # JS Engine — run JavaScript LVGL apps (QuickJS + libuv)
 LV_USE_JS_ENGINE 1
+LV_USE_JS_LOADER 1
 
 # Stdlib
 LV_USE_STDLIB_MALLOC LV_STDLIB_CLIB
