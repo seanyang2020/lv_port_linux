@@ -634,8 +634,9 @@ if(LV_USE_JS_LOADER_ENABLED)
     # RUNPATH so dynamic linker finds jsloader .so at runtime
     target_link_options(lvglsim PRIVATE -Wl,-rpath,${JSROOT_DIR}/lib)
 
-    # Push feature macros onto LVGL submodule targets
+    # Push feature macros + include paths onto LVGL submodule targets
     target_compile_definitions(lvgl_demos PRIVATE LV_USE_JS_ENGINE=1 LV_USE_JS_LOADER=1)
+    target_include_directories(lvgl_demos PRIVATE ${JSLOADER_INC})
     target_compile_definitions(lvgl PRIVATE LV_USE_JS_ENGINE=1)
 
 elseif(LV_USE_JS_ENGINE_ENABLED)
