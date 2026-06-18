@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 adb wait-for-device
 SCRIPT_DIR=$(
        	cd $(dirname $0)
@@ -33,11 +33,10 @@ if [ ! -d $LVGL_LINUX_PATH ];then
    echo "Try $SCRIPT_DIR as work dir"
    LVGL_LINUX_PATH=$SCRIPT_DIR
 fi
-alias armstrip='/home/scm/prebuilt/gcc-linaro-14.0.0-2023.06-x86_64_arm-linux-gnueabihf/bin/arm-linux-gnueabihf-strip'
 . ~/bin/env.sh
 . ~/bin/qmenv qm10xd
 cp  $LVGL_LINUX_PATH/build-xos/bin/lvglsim $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip
-armstrip $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip
+$qmarmstrip $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip
 adb push $LVGL_LINUX_PATH/build-xos/bin/lvglsim_strip /mnt/sdcard/lvglsim
 export BAIDU_CLIENT_ID=$(sean-token.py key baidupan AppKey)
 export BAIDU_CLIENT_SECRET=$(sean-token.py key baidupan Secretkey)
@@ -45,7 +44,7 @@ export BAIDU_DEVICE_ID=$(sean-token.py key baidupan AppID)
 adb shell "echo export BAIDU_CLIENT_ID=${BAIDU_CLIENT_ID} >> /tmp/.env"
 adb shell "echo export BAIDU_CLIENT_SECRET=${BAIDU_CLIENT_SECRET} >> /tmp/.env"
 adb shell "echo export BAIDU_DEVICE_ID=${BAIDU_DEVICE_ID} >> /tmp/.env"
-adb shell "echo export LV_ROTATION=180 >> /tmp/.env"
+#adb shell "echo export LV_ROTATION=180 >> /tmp/.env"
 adb shell chmod +x /tmp/.env
 adb shell pkill qxosui 
 adb shell touch /tmp/.NO_BIND_WDT2QXOSUI

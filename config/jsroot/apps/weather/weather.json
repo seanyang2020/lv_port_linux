@@ -1,0 +1,42 @@
+{
+  "temp": 29.7,
+  "cond": "Clear",
+  "icon": "sunny",
+  "fc": [
+    {
+      "d": "Today",
+      "i": "sunny",
+      "hi": 22,
+      "lo": 15
+    },
+    {
+      "d": "Tom.",
+      "i": "cloudy",
+      "hi": 20,
+      "lo": 14
+    },
+    {
+      "d": "Day+2",
+      "i": "sunny",
+      "hi": 23,
+      "lo": 16
+    },
+    {
+      "d": "Day+3",
+      "i": "overcast",
+      "hi": 19,
+      "lo": 13
+    }
+  ],
+  "ts": 1788579817355,
+  "city": "Shanghai",
+  "screen": {
+    "auto_off_minutes": 5,
+    "auto_off_enabled": true,
+    "wake_timeout_seconds": 15,
+    "double_tap_wake": true,
+    "schedule_on": "07:30",
+    "schedule_off": "23:30",
+    "schedule_enabled": true
+  }
+}

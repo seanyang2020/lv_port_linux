@@ -1,1 +1,5 @@
-{"auto_start_app":"none"}
+{
+  "auto_start_app": "none",
+  "tab_cycle": true,
+  "tab_cycle_interval": 5000
+}
